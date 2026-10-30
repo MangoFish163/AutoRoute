@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Local Model Router",
+  "version": "0.1.0",
+  "identifier": "com.localmodelrouter.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev -- --port 5175 --strictPort",
+    "devUrl": "http://127.0.0.1:5175",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Local Model Router",
+        "width": 1088,
+        "height": 713,
+        "minWidth": 980,
+        "minHeight": 640,
+        "center": true,
+        "resizable": true
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": ["icons/icon.ico"],
+    "category": "DeveloperTool",
+    "shortDescription": "Personal local model routing service",
+    "resources": {
+      "../../backend/app.py": "backend/app.py",
+      "../../backend/requirements.txt": "backend/requirements.txt"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+[package]
+name = "local-model-router"
+version = "0.1.0"
+description = "Local Model Router desktop app"
+authors = ["Local Model Router"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
