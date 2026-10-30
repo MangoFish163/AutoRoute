@@ -86,6 +86,7 @@ function App() {
   const [serviceMenuOpen, setServiceMenuOpen] = useState(false)
   const serviceMenuRef = useRef(null)
   const [refreshing, setRefreshing] = useState(false)
+  const tabRef = useRef(tab)
   const [tuningSettingsOpen, setTuningSettingsOpen] = useState(false)
   const [historyDrawer, setHistoryDrawer] = useState(null)
   const [historyData, setHistoryData] = useState({weights:{items:[],total:0},audits:{items:[],total:0}})
@@ -96,19 +97,21 @@ function App() {
   const [ruleForm, setRuleForm] = useState({enabled:true,failure_threshold:3,cooldown_seconds:90,min_auto_factor:0.25,max_auto_factor:1.5})
   const rulesLoaded = useRef(false)
 
-  const refresh = async () => {
+  const refresh = async ({ includeDeployments = true } = {}) => {
     try {
-      const [d,s,e,st,b] = await Promise.all([api('/deployments'), api('/summary'), logsLiveRef.current ? Promise.resolve(null) : api('/events?limit=500'), api('/settings'), api('/bootstrap')])
-      setDeps(d); setSummary(s); if(e)setEvents(e); setSettings(st); setBootstrap(b)
+      const [d,s,e,st,b] = await Promise.all([includeDeployments ? api('/deployments') : Promise.resolve(null), api('/summary'), logsLiveRef.current ? Promise.resolve(null) : api('/events?limit=500'), api('/settings'), api('/bootstrap')])
+      if(d)setDeps(d); setSummary(s); if(e)setEvents(e); setSettings(st); setBootstrap(b)
       if (st.ai && !aiLoaded.current) { setAiForm(old=>({...old,...st.ai,api_key:''})); aiLoaded.current=true }
       if (st.rules && !rulesLoaded.current) { setRuleForm(old=>({...old,...st.rules})); rulesLoaded.current=true }
       return true
     } catch (e) { setToast(e.message); return false }
   }
-  const manualRefresh = async () => { setRefreshing(true); const ok=await refresh(); if(ok)setToast('数据已刷新'); setRefreshing(false) }
+  const manualRefresh = async () => { if(refreshing)return; setRefreshing(true); try { await refresh() } finally { setRefreshing(false) } }
   const openHistory = async kind => { setHistoryDrawer(kind); setExpandedHistoryId(null); setHistoryLoading(true); try { const data=await api(`/history/${kind}?limit=20&offset=0`); setHistoryData(old=>({...old,[kind]:data})) } catch(e) { if(e.message==='Not Found'||e.message.includes('404')) { const items=kind==='weights'?(settings?.weight_events||[]):(settings?.ai_audits||[]); setHistoryData(old=>({...old,[kind]:{items,total:items.length,limit:items.length,offset:0}})) } else setToast(e.message) } finally { setHistoryLoading(false) } }
   const loadMoreHistory = async () => { if(!historyDrawer)return; const current=historyData[historyDrawer]; setHistoryLoading(true); try { const data=await api(`/history/${historyDrawer}?limit=20&offset=${current.items.length}`); setHistoryData(old=>({...old,[historyDrawer]:{...data,items:[...old[historyDrawer].items,...data.items]}})) } catch(e) { setToast(e.message) } finally { setHistoryLoading(false) } }
-  useEffect(() => { refresh(); const timer=setInterval(refresh, 12000); return ()=>clearInterval(timer) }, [])
+  useEffect(() => { tabRef.current=tab }, [tab])
+  useEffect(() => { refresh(); const timer=setInterval(()=>refresh({includeDeployments:tabRef.current!=='models'}),12000); return ()=>clearInterval(timer) }, [])
+  useEffect(() => { if(tab==='models') refresh({includeDeployments:true}) }, [tab])
   useEffect(() => { logsLiveRef.current=logsLive }, [logsLive])
   useEffect(() => {
     const now = Date.now()
@@ -237,7 +240,7 @@ function App() {
             </div><div className="overview-footnote">统计范围与请求日志共用时间区间；延迟来自实际请求记录，Token 仅计入上游返回用量的请求。</div></>
           })()}
           {overviewDrawer&&<div className="overview-drawer-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setOverviewDrawer(null)}}><aside className="overview-drawer" role="dialog" aria-modal="true" aria-label={overviewDrawer.title}><header><div><small>统计明细</small><h2>{overviewDrawer.title}</h2><p>当前时间区间 · {overviewDrawer.rows.length} 条记录</p></div><button className="icon-button" onClick={()=>setOverviewDrawer(null)} aria-label="关闭">×</button></header><div className="overview-drawer-total">合计 <b>{overviewDrawer.total}</b></div><div className="overview-drawer-list">{overviewDrawer.rows.length?overviewDrawer.rows.map((r,i)=><div className="overview-drawer-row" key={r.name}><span className="overview-drawer-rank">{i+1}</span><span className="overview-drawer-name" title={r.name}>{r.name}</span><b title={Number(r[overviewDrawer.field]).toLocaleString()}>{overviewDrawer.format(r[overviewDrawer.field])}</b></div>):<div className="overview-empty">当前时间区间暂无记录</div>}</div></aside></div>}
-        </>}        {tab==='models' && <><div className="page-heading"><div><div className="eyebrow">CONFIGURATION</div><h1>模型路由</h1><p>管理供应商部署、上游凭据和路由权重。</p></div><Button variant="primary" onClick={openCreate}><Plus size={16}/>添加模型</Button></div><div className="toolbar"><div className="searchbox"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索模型、供应商或别名..."/></div><button className="button secondary" onClick={refresh}><RefreshCw size={15}/>刷新</button><button className="button secondary" onClick={()=>setTab('tuning')}><Sparkles size={15}/>调优规则</button></div><div className="panel full-table"><div className="table-wrap"><table><thead><tr><th>模型部署</th><th>逻辑模型</th><th>供应商</th><th>状态</th><th>生效权重</th><th>Token</th><th>RPM</th><th>代理</th><th></th></tr></thead><tbody>{filtered.map(d=><ModelRow key={d.id} dep={d} expanded onSelect={()=>{setSelectedModel(d);setModelDetailTab('info')}} onEdit={()=>openEdit(d)} onDelete={()=>deleteDeployment(d)}/>)}{!filtered.length&&<tr><td colSpan="9"><Empty title={deps.length?'没有匹配项':'开始配置你的模型'} body={deps.length?'试试其他搜索词。':'添加供应商、模型 ID 与 API Token。'} action={openCreate}/></td></tr>}</tbody></table></div><div className="panel-footer"><span>{filtered.length} 个部署 · {aliases.length} 个逻辑模型</span><span className="muted">每 12 秒自动刷新</span></div></div></>}
+        </>}        {tab==='models' && <><div className="page-heading"><div><div className="eyebrow">CONFIGURATION</div><h1>模型路由</h1><p>管理供应商部署、上游凭据和路由权重。</p></div><Button variant="primary" onClick={openCreate}><Plus size={16}/>添加模型</Button></div><div className="toolbar"><div className="searchbox"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索模型、供应商或别名..."/></div><button className="button secondary" onClick={manualRefresh} disabled={refreshing}>{refreshing?<RefreshCw className="spin" size={15}/>:<RefreshCw size={15}/>}刷新</button><button className="button secondary" onClick={()=>setTab('tuning')}><Sparkles size={15}/>调优规则</button></div><div className="panel full-table"><div className="table-wrap"><table><thead><tr><th>模型部署</th><th>逻辑模型</th><th>供应商</th><th>状态</th><th>生效权重</th><th>Token</th><th>RPM</th><th>代理</th><th></th></tr></thead><tbody>{filtered.map(d=><ModelRow key={d.id} dep={d} expanded onSelect={()=>{setSelectedModel(d);setModelDetailTab('info')}} onEdit={()=>openEdit(d)} onDelete={()=>deleteDeployment(d)}/>)}{!filtered.length&&<tr><td colSpan="9"><Empty title={deps.length?'没有匹配项':'开始配置你的模型'} body={deps.length?'试试其他搜索词。':'添加供应商、模型 ID 与 API Token。'} action={openCreate}/></td></tr>}</tbody></table></div><div className="panel-footer"><span>{filtered.length} 个部署 · {aliases.length} 个逻辑模型</span><span className="muted">进入页面或模型变更后刷新</span></div></div></>}
         {tab==='logs' && <><div className="page-heading"><div><div className="eyebrow">OBSERVABILITY</div><h1>请求日志</h1><p>从请求趋势、失败类型、延迟和路由尝试中定位问题。</p></div><button className="button secondary" onClick={()=>setLogStatusOpen(true)}><Activity size={15}/>查看状态</button></div>
           <div className="logs-toolbar"><div className="logs-search"><Search size={16}/><input value={logQuery} onChange={e=>{setLogQuery(e.target.value);setLogPage(1)}} placeholder="搜索请求 ID、模型、供应商、部署或错误"/><button className={logsLive?'live-active':''} onClick={()=>setLogsLive(v=>!v)}><Radio size={14}/>{logsLive?'实时刷新中':'实时刷新'}</button></div><DateRangePicker start={logStart} end={logEnd} onChange={(s,e)=>{logRangeManuallyChanged.current=true;setLogRange([s,e]);setLogPage(1)}}/></div>
           <RequestTrend events={logFiltered} start={logStart} end={logEnd}/>
