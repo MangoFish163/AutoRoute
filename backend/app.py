@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request
@@ -22,6 +22,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+from provider_presets import DEFAULT_PROVIDER_PRESETS
+from responses_adapter import uses_responses, to_responses, responses_to_chat, responses_chat_stream, anthropic_for_responses
 
 
 APP_DIR = Path(os.environ.get("LOCAL_MODEL_ROUTER_HOME", Path.home() / ".local-model-router"))
@@ -181,6 +184,8 @@ def init_db() -> None:
             db.execute("ALTER TABLE deployments ADD COLUMN full_url INTEGER NOT NULL DEFAULT 0")
         if "thinking_mode" not in deployment_columns:
             db.execute("ALTER TABLE deployments ADD COLUMN thinking_mode INTEGER NOT NULL DEFAULT 0")
+        if "config_revision" not in deployment_columns:
+            db.execute("ALTER TABLE deployments ADD COLUMN config_revision INTEGER NOT NULL DEFAULT 0")
         if "total_tokens" not in event_columns:
             db.execute("ALTER TABLE request_events ADD COLUMN total_tokens INTEGER")
         if "input_tokens" not in event_columns:
@@ -201,6 +206,12 @@ def init_db() -> None:
                 "enabled": True, "cooldown_seconds": 90, "failure_threshold": 3,
                 "max_auto_factor": 1.5, "min_auto_factor": 0.25
             }),))
+        # Seed both fresh databases and older installations that never saved presets.
+        # An existing entry (even {}) is authoritative, including user deletions.
+        db.execute(
+            "INSERT OR IGNORE INTO settings(key,value) VALUES('provider_presets',?)",
+            (json.dumps(DEFAULT_PROVIDER_PRESETS, ensure_ascii=False),),
+        )
         if not BOOTSTRAP_KEY_PATH.exists():
             BOOTSTRAP_KEY_PATH.write_text("sk-local-" + secrets.token_urlsafe(28), encoding="utf-8")
 
@@ -286,9 +297,12 @@ def safe_deployment(row: sqlite3.Row) -> dict[str, Any]:
 def get_state(deployment_id: str) -> dict[str, Any]:
     with connect() as db:
         row = db.execute("SELECT * FROM deployment_state WHERE deployment_id=?", (deployment_id,)).fetchone()
+        dep = db.execute("SELECT * FROM deployments WHERE id=?", (deployment_id,)).fetchone()
     if not row:
         return {"consecutive_failures": 0, "cooldown_until": 0, "successes": 0, "failures": 0, "health": "ready"}
     result = dict(row)
+    if dep and not cooldown_allowed(dep, result["consecutive_failures"], get_rule_settings()):
+        result["cooldown_until"] = 0
     result["health"] = "cooldown" if result["cooldown_until"] > time.time() else ("degraded" if result["consecutive_failures"] else "ready")
     return result
 
@@ -296,7 +310,18 @@ def get_state(deployment_id: str) -> dict[str, Any]:
 def get_rule_settings() -> dict[str, Any]:
     with connect() as db:
         row = db.execute("SELECT value FROM settings WHERE key='rule_settings'").fetchone()
-    return json.loads(row[0]) if row else {}
+    rules = json.loads(row[0]) if row else {}
+    rules["failure_threshold"] = max(3, int(rules.get("failure_threshold", 3)))
+    return rules
+
+
+def effective_weight(dep) -> float:
+    return dep["base_weight"] if dep["weight_locked"] else dep["base_weight"] * dep["auto_weight"]
+
+
+def cooldown_allowed(dep, consecutive: int, rules: dict[str, Any]) -> bool:
+    return bool(rules.get("enabled", True) and consecutive >= max(3, rules.get("failure_threshold", 3))
+                and effective_weight(dep) < 50)
 
 
 def redact(message: str, keys: list[str] | None = None) -> str:
@@ -307,33 +332,48 @@ def redact(message: str, keys: list[str] | None = None) -> str:
     return text[:500]
 
 
-def record_result(deployment_id: str, success: bool, status_code: int | None, retry_after: float | None = None) -> None:
+def record_result(deployment_id: str, success: bool, status_code: int | None, retry_after: float | None = None,
+                  *, key_index: int | None = None, config_revision: int | None = None) -> None:
     rules = get_rule_settings()
     with connect() as db:
+        # Serialize results with saves so a response from an old configuration cannot
+        # reapply penalties after the user has reset the deployment.
+        db.execute("BEGIN IMMEDIATE")
+        dep = db.execute("SELECT * FROM deployments WHERE id=?", (deployment_id,)).fetchone()
+        if not dep or (config_revision is not None and dep["config_revision"] != config_revision):
+            return
         db.execute("INSERT OR IGNORE INTO deployment_state(deployment_id,updated_at) VALUES(?,?)", (deployment_id, now_iso()))
         row = db.execute("SELECT * FROM deployment_state WHERE deployment_id=?", (deployment_id,)).fetchone()
         failures = row["failures"] + (0 if success else 1)
         successes = row["successes"] + (1 if success else 0)
         consecutive = 0 if success else row["consecutive_failures"] + 1
-        cooldown_until = row["cooldown_until"]
-        if not success and rules.get("enabled", True):
-            if status_code != 429 and consecutive >= rules.get("failure_threshold", 3):
-                cooldown_until = time.time() + max(rules.get("cooldown_seconds", 90), retry_after or 0)
-        auto_weight = db.execute("SELECT auto_weight,weight_locked FROM deployments WHERE id=?", (deployment_id,)).fetchone()
-        if auto_weight and rules.get("enabled", True) and not auto_weight["weight_locked"]:
+        # Decide protection using the weight BEFORE this result reduces it. Crossing
+        # below 50 permits cooling on the next failed request, never on this one.
+        allow_cooldown = not success and cooldown_allowed(dep, consecutive, rules)
+        factor = dep["auto_weight"]
+        if rules.get("enabled", True) and not dep["weight_locked"]:
             if success and successes > 0 and successes % 20 == 0:
-                factor = min(rules.get("max_auto_factor", 1.5), auto_weight["auto_weight"] + 0.03)
+                factor = max(factor, min(rules.get("max_auto_factor", 1.5), factor + 0.03))
+            elif not success:
+                factor = min(factor, max(rules.get("min_auto_factor", 0.25), factor * (0.8 if status_code == 429 else 0.9)))
+            if factor != dep["auto_weight"]:
                 db.execute("UPDATE deployments SET auto_weight=? WHERE id=?", (factor, deployment_id))
-                if factor != auto_weight["auto_weight"]:
-                    db.execute("INSERT INTO weight_events VALUES(?,?,?,?,?,?,?)", (str(uuid.uuid4()), deployment_id, "rule", auto_weight["auto_weight"], factor, "累计成功请求达到 20 的倍数，逐步提高自动权重", now_iso()))
-            elif not success and (status_code == 429 or consecutive >= 2):
-                factor = max(rules.get("min_auto_factor", 0.25), auto_weight["auto_weight"] * (0.8 if status_code == 429 else 0.9))
-                db.execute("UPDATE deployments SET auto_weight=? WHERE id=?", (factor, deployment_id))
-                if factor != auto_weight["auto_weight"]:
-                    reason = "上游返回 429，自动降低权重" if status_code == 429 else f"连续失败 {consecutive} 次，自动降低权重"
-                    db.execute("INSERT INTO weight_events VALUES(?,?,?,?,?,?,?)", (str(uuid.uuid4()), deployment_id, "rule", auto_weight["auto_weight"], factor, reason, now_iso()))
+                reason = "累计成功请求达到 20 的倍数，逐步提高自动权重" if success else f"连续失败 {consecutive} 次，优先降低自动权重"
+                db.execute("INSERT INTO weight_events VALUES(?,?,?,?,?,?,?)", (str(uuid.uuid4()), deployment_id, "rule", dep["auto_weight"], factor, reason, now_iso()))
+        cooldown_until = time.time() + max(rules.get("cooldown_seconds", 90), retry_after or 0) if allow_cooldown else 0
         db.execute("UPDATE deployment_state SET consecutive_failures=?,cooldown_until=?,successes=?,failures=?,updated_at=? WHERE deployment_id=?",
                    (consecutive, cooldown_until, successes, failures, now_iso(), deployment_id))
+        if success or effective_weight(dep) >= 50 or not rules.get("enabled", True):
+            db.execute("UPDATE credential_state SET cooldown_until=0 WHERE deployment_id=?", (deployment_id,))
+        if key_index is not None:
+            key_row = db.execute("SELECT consecutive_failures FROM credential_state WHERE deployment_id=? AND key_index=?", (deployment_id, key_index)).fetchone()
+            key_failures = 0 if success else (key_row[0] if key_row else 0) + 1
+            key_cooldown = 0
+            if allow_cooldown and key_failures >= rules["failure_threshold"] and status_code in (401, 403, 429):
+                key_cooldown = time.time() + max(retry_after or 0, 3600 if status_code in (401, 403) else rules.get("cooldown_seconds", 90))
+            db.execute("INSERT INTO credential_state(deployment_id,key_index,cooldown_until,consecutive_failures,updated_at) VALUES(?,?,?,?,?) "
+                       "ON CONFLICT(deployment_id,key_index) DO UPDATE SET cooldown_until=excluded.cooldown_until,consecutive_failures=excluded.consecutive_failures,updated_at=excluded.updated_at",
+                       (deployment_id, key_index, key_cooldown, key_failures, now_iso()))
 
 
 def candidates(alias: str) -> list[dict[str, Any]]:
@@ -353,20 +393,15 @@ def candidates(alias: str) -> list[dict[str, Any]]:
 
 
 def available_key_indices(deployment_id: str, count: int) -> list[int]:
+    rules = get_rule_settings()
     with connect() as db:
-        states = {row["key_index"]: row["cooldown_until"] for row in db.execute("SELECT key_index,cooldown_until FROM credential_state WHERE deployment_id=?", (deployment_id,)).fetchall()}
+        dep = db.execute("SELECT * FROM deployments WHERE id=?", (deployment_id,)).fetchone()
+        state = db.execute("SELECT consecutive_failures FROM deployment_state WHERE deployment_id=?", (deployment_id,)).fetchone()
+        states = {row["key_index"]: row for row in db.execute("SELECT key_index,cooldown_until,consecutive_failures FROM credential_state WHERE deployment_id=?", (deployment_id,)).fetchall()}
+    if not dep or not cooldown_allowed(dep, state[0] if state else 0, rules):
+        return list(range(count))
     now = time.time()
-    return [index for index in range(count) if states.get(index, 0) <= now]
-
-
-def cooldown_credential(deployment_id: str, key_index: int, status_code: int, retry_after: float | None = None) -> None:
-    if status_code not in (401, 403, 429):
-        return
-    cooldown = max(retry_after or 0, 3600 if status_code in (401, 403) else 90)
-    with connect() as db:
-        db.execute("INSERT INTO credential_state(deployment_id,key_index,cooldown_until,consecutive_failures,updated_at) VALUES(?,?,?,?,?) "
-                   "ON CONFLICT(deployment_id,key_index) DO UPDATE SET cooldown_until=excluded.cooldown_until,consecutive_failures=credential_state.consecutive_failures+1,updated_at=excluded.updated_at",
-                   (deployment_id, key_index, time.time() + cooldown, 1, now_iso()))
+    return [index for index in range(count) if index not in states or states[index]["consecutive_failures"] < rules["failure_threshold"] or states[index]["cooldown_until"] <= now]
 
 
 def weighted_order(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -432,6 +467,8 @@ class StreamUsage:
                 usage = event.get("usage")
                 if not isinstance(usage, dict) and isinstance(event.get("message"), dict):
                     usage = event["message"].get("usage")
+                if not isinstance(usage, dict) and isinstance(event.get("response"), dict):
+                    usage = event["response"].get("usage")
                 if isinstance(usage, dict):
                     self.events.append(usage)
                     self.usage = merge_usage(self.usage or {}, usage)
@@ -478,13 +515,14 @@ def save_event(request_id: str, protocol: str, alias: str, deployment: dict[str,
 
 def endpoint(base_url: str, provider: str, protocol: str, full_url: bool = False) -> str:
     base = base_url.rstrip("/")
-    if full_url:
+    if full_url or (provider in ("openai", "responses") and urlsplit(base).path.endswith("/responses")):
         return base
-    if base.endswith("/v1"):
-        base = base[:-3]
+    if provider == "responses":
+        return base + ("/responses" if urlsplit(base).path else "/v1/responses")
     if provider == "anthropic":
-        return base + "/v1/messages"
-    return base + "/v1/chat/completions"
+        return base + ("/messages" if base.endswith("/v1") else "/v1/messages")
+    # Preserve vendor prefixes such as Ark's /api/v3.
+    return base + ("/chat/completions" if urlsplit(base).path else "/v1/chat/completions")
 
 
 def windows_system_proxy() -> str | None:
@@ -506,11 +544,18 @@ def windows_system_proxy() -> str | None:
 
 
 def proxy_for(dep: dict[str, Any]) -> str | None:
-    if dep.get("proxy_url"):
-        return dep["proxy_url"]
-    if dep.get("use_system_proxy"):
-        return windows_system_proxy()
-    return None
+    # The checkbox is the master switch, including a previously saved custom URL.
+    if not dep.get("use_system_proxy", True):
+        return None
+    custom = str(dep.get("proxy_url") or "").strip()
+    return custom or windows_system_proxy()
+
+
+def proxy_options(dep: dict[str, Any]) -> dict[str, Any]:
+    proxy = proxy_for(dep)
+    # Only consult environment defaults when enabled and no explicit proxy was found.
+    # Direct connections must ignore HTTP_PROXY/HTTPS_PROXY/ALL_PROXY entirely.
+    return {"proxy": proxy, "trust_env": bool(dep.get("use_system_proxy", True)) and proxy is None}
 
 
 def to_anthropic(payload: dict[str, Any], model: str) -> dict[str, Any]:
@@ -631,6 +676,13 @@ async def forward(payload: dict[str, Any], inbound: str, request_id: str) -> tup
             upstream = to_anthropic(payload, dep["upstream_model"]) if (inbound == "openai" and dep["provider"] == "anthropic") else (
                 to_openai(payload, dep["upstream_model"]) if (inbound == "anthropic" and dep["provider"] == "openai") else dict(payload))
             upstream["model"] = dep["upstream_model"]
+            responses = uses_responses(dep)
+            if responses:
+                try:
+                    chat = anthropic_for_responses(payload, dep["upstream_model"]) if inbound == "anthropic" else payload
+                    upstream = to_responses(chat, dep["upstream_model"])
+                except ValueError as exc:
+                    raise HTTPException(400, str(exc)) from exc
             url = endpoint(dep["base_url"], dep["provider"], inbound, bool(dep.get("full_url", False)))
             headers = {"content-type": "application/json", "x-request-id": request_id}
             if dep["provider"] == "anthropic":
@@ -638,8 +690,7 @@ async def forward(payload: dict[str, Any], inbound: str, request_id: str) -> tup
                 headers["anthropic-version"] = "2023-06-01"
             else:
                 headers["authorization"] = f"Bearer {api_key}"
-            proxy = proxy_for(dep)
-            async with httpx.AsyncClient(timeout=dep["timeout_seconds"], proxy=proxy, trust_env=bool(dep["use_system_proxy"])) as client:
+            async with httpx.AsyncClient(timeout=dep["timeout_seconds"], **proxy_options(dep)) as client:
                 response = await client.post(url, headers=headers, json=upstream)
             elapsed = int((time.perf_counter() - request_started) * 1000)
             if response.status_code >= 400:
@@ -647,8 +698,7 @@ async def forward(payload: dict[str, Any], inbound: str, request_id: str) -> tup
                     retry_seconds = float(response.headers.get("retry-after", ""))
                 except ValueError:
                     retry_seconds = None
-                cooldown_credential(dep["id"], key_index, response.status_code, retry_seconds)
-                record_result(dep["id"], False, response.status_code, retry_seconds)
+                record_result(dep["id"], False, response.status_code, retry_seconds, key_index=key_index, config_revision=dep.get("config_revision"))
                 attempts.append({**supplier_snapshot(dep), "deployment_id": dep["id"], "deployment": dep["name"], "credential": key_index + 1, "status": response.status_code})
                 last_error = RuntimeError(redact(f"Upstream returned HTTP {response.status_code}: {response.text[:350]}", dep["api_keys"]))
                 if response.status_code == 400:
@@ -656,18 +706,22 @@ async def forward(payload: dict[str, Any], inbound: str, request_id: str) -> tup
                 continue
             data = response.json()
             raw_usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
-            if inbound == "openai" and dep["provider"] == "anthropic":
+            if responses:
+                data = responses_to_chat(data, alias)
+                if inbound == "anthropic":
+                    data = openai_to_anthropic_response(data, alias)
+            elif inbound == "openai" and dep["provider"] == "anthropic":
                 data = anthropic_to_openai_response(data, alias)
             elif inbound == "anthropic" and dep["provider"] == "openai":
                 data = openai_to_anthropic_response(data, alias)
             else:
                 data["model"] = alias
             _, _, total_tokens = token_usage(raw_usage)
-            record_result(dep["id"], True, response.status_code)
+            record_result(dep["id"], True, response.status_code, key_index=key_index, config_revision=dep.get("config_revision"))
             attempts.append({**supplier_snapshot(dep), "deployment_id": dep["id"], "deployment": dep["name"], "credential": key_index + 1, "status": response.status_code})
             return data, dep, attempts, response.status_code, elapsed, total_tokens, raw_usage
         except (httpx.TimeoutException, httpx.TransportError, ValueError) as exc:
-            record_result(dep["id"], False, 408 if isinstance(exc, httpx.TimeoutException) else 502)
+            record_result(dep["id"], False, 408 if isinstance(exc, httpx.TimeoutException) else 502, key_index=key_index, config_revision=dep.get("config_revision"))
             attempts.append({**supplier_snapshot(dep), "deployment_id": dep["id"], "deployment": dep["name"], "credential": key_index + 1, "status": "error", "error_kind": "timeout" if isinstance(exc, httpx.TimeoutException) else "network_error"})
             last_error = exc
             continue
@@ -679,8 +733,8 @@ async def forward(payload: dict[str, Any], inbound: str, request_id: str) -> tup
 async def forward_stream(payload: dict[str, Any], inbound: str, request_id: str):
     request_started = time.perf_counter()
     alias = payload.get("model", "")
-    # Cross-protocol event translation is intentionally excluded from v0.1; same-protocol SSE is passed through.
-    pool = [dep for dep in candidates(alias) if dep["provider"] == inbound]
+    # Native protocols pass through; Responses events are translated for Chat clients.
+    pool = [dep for dep in candidates(alias) if dep["provider"] == inbound or (inbound == "openai" and uses_responses(dep))]
     pool = weighted_order(pool)
     if not pool:
         raise HTTPException(status_code=503, detail={"error": {"message": f"No streaming-compatible deployment available for model '{alias}'", "type": "model_unavailable", "request_id": request_id}})
@@ -690,7 +744,13 @@ async def forward_stream(payload: dict[str, Any], inbound: str, request_id: str)
         api_key, key_index = choose_credential(dep)
         upstream = dict(payload)
         upstream["model"] = dep["upstream_model"]
-        if dep["provider"] == "openai":
+        responses = uses_responses(dep)
+        if responses:
+            try:
+                upstream = to_responses(payload, dep["upstream_model"])
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        elif dep["provider"] == "openai":
             upstream.setdefault("stream_options", {}).setdefault("include_usage", True)
         headers = {"content-type": "application/json", "x-request-id": request_id}
         if dep["provider"] == "anthropic":
@@ -699,7 +759,7 @@ async def forward_stream(payload: dict[str, Any], inbound: str, request_id: str)
         else:
             headers["authorization"] = f"Bearer {api_key}"
             url = endpoint(dep["base_url"], dep["provider"], inbound, bool(dep.get("full_url", False)))
-        client = httpx.AsyncClient(timeout=dep["timeout_seconds"], proxy=proxy_for(dep), trust_env=bool(dep["use_system_proxy"]))
+        client = httpx.AsyncClient(timeout=dep["timeout_seconds"], **proxy_options(dep))
         cm = client.stream("POST", url, headers=headers, json=upstream)
         try:
             response = await cm.__aenter__()
@@ -712,43 +772,44 @@ async def forward_stream(payload: dict[str, Any], inbound: str, request_id: str)
                     retry_seconds = float(response.headers.get("retry-after", ""))
                 except ValueError:
                     retry_seconds = None
-                cooldown_credential(dep["id"], key_index, status, retry_seconds)
-                record_result(dep["id"], False, status, retry_seconds)
+                record_result(dep["id"], False, status, retry_seconds, key_index=key_index, config_revision=dep.get("config_revision"))
                 attempts.append({**supplier_snapshot(dep), "deployment_id": dep["id"], "deployment": dep["name"], "credential": key_index + 1, "status": status})
                 last_error = RuntimeError(redact(f"Upstream returned HTTP {status}: {message}", dep["api_keys"]))
                 if status == 400:
                     break
                 continue
-            record_result(dep["id"], True, response.status_code)
             attempts.append({**supplier_snapshot(dep), "deployment_id": dep["id"], "deployment": dep["name"], "credential": key_index + 1, "status": response.status_code})
             async def chunks():
                 status = "success"
                 message = None
                 collected_usage = StreamUsage()
                 try:
-                    async for chunk in response.aiter_bytes():
-                        collected_usage.feed(chunk)
-                        yield chunk
+                    if responses:
+                        async for chunk in responses_chat_stream(response, alias, collected_usage, bool((payload.get("stream_options") or {}).get("include_usage"))):
+                            yield chunk
+                    else:
+                        async for chunk in response.aiter_bytes():
+                            collected_usage.feed(chunk)
+                            yield chunk
                 except asyncio.CancelledError:
                     status, message = "error", "Client disconnected during stream"
-                    record_result(dep["id"], False, 499)
                     raise
                 except Exception as exc:
-                    status, message = "error", str(exc)[:350]
-                    record_result(dep["id"], False, 408 if isinstance(exc, httpx.TimeoutException) else 502)
+                    status, message = "error", redact(str(exc)[:350], dep["api_keys"])
                     raise
                 finally:
+                    record_result(dep["id"], status == "success", response.status_code if status == "success" else 502, key_index=key_index, config_revision=dep.get("config_revision"))
                     collected_usage.feed(b"", final=True)
                     elapsed = int((time.perf_counter() - request_started) * 1000)
                     save_event(request_id, inbound, alias, dep, status, response.status_code, elapsed, "stream_error" if message else None, message, attempts, usage=collected_usage.usage, usage_events=collected_usage.events)
                     await cm.__aexit__(None, None, None)
                     await client.aclose()
             media_type = response.headers.get("content-type", "text/event-stream")
-            return StreamingResponse(chunks(), status_code=response.status_code, media_type=None, headers={"content-type": media_type, "x-request-id": request_id, "x-local-router-deployment": dep["name"]})
+            return StreamingResponse(chunks(), status_code=response.status_code, media_type=None, headers={"content-type": media_type, "x-request-id": request_id, "x-local-router-deployment": quote(dep["name"])})
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             await cm.__aexit__(None, None, None)
             await client.aclose()
-            record_result(dep["id"], False, 408 if isinstance(exc, httpx.TimeoutException) else 502)
+            record_result(dep["id"], False, 408 if isinstance(exc, httpx.TimeoutException) else 502, key_index=key_index, config_revision=dep.get("config_revision"))
             attempts.append({**supplier_snapshot(dep), "deployment_id": dep["id"], "deployment": dep["name"], "credential": key_index + 1, "status": "error", "error_kind": "timeout" if isinstance(exc, httpx.TimeoutException) else "network_error"})
             last_error = exc
     message = str(last_error or "All streaming deployments failed")
@@ -771,7 +832,7 @@ async def proxy_request(request: Request, inbound: str, authorization: str | Non
             return response
         data, dep, attempts, status, latency, total_tokens, usage = await forward(payload, inbound, request_id)
         save_event(request_id, protocol, alias, dep, "success", status, latency, None, None, attempts, total_tokens, usage)
-        return JSONResponse(data, status_code=status, headers={"x-request-id": request_id, "x-local-router-deployment": dep["name"]})
+        return JSONResponse(data, status_code=status, headers={"x-request-id": request_id, "x-local-router-deployment": quote(dep["name"])})
     except HTTPException as exc:
         elapsed = int((time.perf_counter() - started) * 1000)
         detail = exc.detail if isinstance(exc.detail, dict) else {"error": {"message": str(exc.detail)}}
@@ -814,9 +875,11 @@ async def test_deployment_connection(request: Request):
         token = keys[0] if keys else ""
     if not base_url or not token:
         raise HTTPException(400, "请填写 API Base URL 和 API Token")
-    if provider not in ("openai", "anthropic"):
+    if provider not in ("openai", "anthropic", "responses"):
         raise HTTPException(400, "不支持的上游协议")
     headers = {"Authorization": f"Bearer {token}"}
+    if uses_responses({"provider": provider, "base_url": base_url}):
+        base_url = base_url.removesuffix("/responses")
     if provider == "anthropic":
         headers = {"x-api-key": token, "anthropic-version": "2023-06-01"}
         urls = [base_url + ("/models" if base_url.endswith("/v1") else "/v1/models")]
@@ -830,9 +893,8 @@ async def test_deployment_connection(request: Request):
     models_url = str(body.get("models_url", "")).strip()
     if models_url:
         urls = [models_url]
-    proxy = body.get("proxy_url") or (windows_system_proxy() if body.get("use_system_proxy", True) else None)
     try:
-        async with httpx.AsyncClient(timeout=min(int(body.get("timeout_seconds", 30)), 60), proxy=proxy, trust_env=bool(body.get("use_system_proxy", True))) as client:
+        async with httpx.AsyncClient(timeout=min(int(body.get("timeout_seconds", 30)), 60), **proxy_options(body)) as client:
             response = await client.get(urls[0], headers=headers)
             if response.status_code == 404 and len(urls) > 1:
                 response = await client.get(urls[1], headers=headers)
@@ -847,8 +909,8 @@ async def test_deployment_connection(request: Request):
 
 @app.post("/api/deployments")
 def create_deployment(body: DeploymentInput):
-    if body.provider not in ("openai", "anthropic"):
-        raise HTTPException(400, "Provider must be openai or anthropic")
+    if body.provider not in ("openai", "anthropic", "responses"):
+        raise HTTPException(400, "Provider must be openai, anthropic or responses")
     dep_id = "dep_" + uuid.uuid4().hex[:12]
     values = body.model_dump()
     values["api_keys"] = json.dumps([protect_secret(key) for key in values["api_keys"] if key.strip()])
@@ -865,10 +927,9 @@ def create_deployment(body: DeploymentInput):
 
 @app.put("/api/deployments/{dep_id}")
 def update_deployment(dep_id: str, body: DeploymentInput):
-    if body.provider not in ("openai", "anthropic"):
-        raise HTTPException(400, "Provider must be openai or anthropic")
+    if body.provider not in ("openai", "anthropic", "responses"):
+        raise HTTPException(400, "Provider must be openai, anthropic or responses")
     values = body.model_dump()
-    replace_keys = bool(values["api_keys"])
     with connect() as db:
         old = db.execute("SELECT api_keys FROM deployments WHERE id=?", (dep_id,)).fetchone()
     if old is None:
@@ -877,12 +938,21 @@ def update_deployment(dep_id: str, body: DeploymentInput):
     for key in ("enabled", "weight_locked", "use_system_proxy", "full_url", "thinking_mode"):
         values[key] = int(values[key])
     with connect() as db:
-        exists = db.execute("SELECT 1 FROM deployments WHERE id=?", (dep_id,)).fetchone()
-        if not exists:
+        db.execute("BEGIN IMMEDIATE")
+        current = db.execute("SELECT auto_weight FROM deployments WHERE id=?", (dep_id,)).fetchone()
+        if not current:
             raise HTTPException(404, "Deployment not found")
-        db.execute("UPDATE deployments SET " + ",".join(f"{key}=?" for key in values) + " WHERE id=?", [*values.values(), dep_id])
-        if replace_keys:
-            db.execute("DELETE FROM credential_state WHERE deployment_id=?", (dep_id,))
+        values["auto_weight"] = 1
+        db.execute("UPDATE deployments SET " + ",".join(f"{key}=?" for key in values) + ",config_revision=config_revision+1 WHERE id=?", [*values.values(), dep_id])
+        if current["auto_weight"] != 1:
+            db.execute("INSERT INTO weight_events VALUES(?,?,?,?,?,?,?)", (str(uuid.uuid4()), dep_id, "manual", current["auto_weight"], 1,
+                       "用户保存部署，重置自动权重因子", now_iso()))
+        # Saving configuration is an explicit retry after the user fixes an upstream.
+        # Clear both deployment and credential cooldowns, even when keys are unchanged.
+        db.execute("UPDATE deployment_state SET cooldown_until=0,consecutive_failures=0,updated_at=? WHERE deployment_id=?",
+                   (now_iso(), dep_id))
+        db.execute("DELETE FROM credential_state WHERE deployment_id=?", (dep_id,))
+        db.execute("DELETE FROM settings WHERE key=?", (f"key_cursor:{dep_id}",))
         row = db.execute("SELECT * FROM deployments WHERE id=?", (dep_id,)).fetchone()
     return safe_deployment(row)
 
@@ -1051,7 +1121,7 @@ def save_ai_config(body: dict[str, Any]):
 def save_rules(body: dict[str, Any]):
     rules = {"enabled": bool(body.get("enabled", True)),
              "cooldown_seconds": max(10, min(3600, int(body.get("cooldown_seconds", 90)))),
-             "failure_threshold": max(1, min(10, int(body.get("failure_threshold", 3)))),
+             "failure_threshold": max(3, min(10, int(body.get("failure_threshold", 3)))),
              "max_auto_factor": max(1, min(3, float(body.get("max_auto_factor", 1.5)))),
              "min_auto_factor": max(0.1, min(1, float(body.get("min_auto_factor", 0.25))))}
     with connect() as db:

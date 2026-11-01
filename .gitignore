@@ -8,3 +8,4 @@ frontend/src-tauri/gen/schemas/
 backend/runtime.*.log
 .venv/
 __pycache__/
+.desktop-launch/

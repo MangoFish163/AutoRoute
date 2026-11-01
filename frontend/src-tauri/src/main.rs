@@ -1,10 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
+    io::{Read, Write},
     net::TcpStream,
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::Mutex,
+    time::{Duration, Instant},
 };
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
@@ -13,6 +15,61 @@ use tauri::{
 };
 
 struct BackendProcess(Mutex<Option<Child>>);
+
+fn backend_ready(address: &str) -> bool {
+    let Ok(address) = address.parse() else { return false };
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(200)) else {
+        return false;
+    };
+    let timeout = Some(Duration::from_millis(500));
+    if stream.set_read_timeout(timeout).is_err() || stream.set_write_timeout(timeout).is_err() {
+        return false;
+    }
+    if stream.write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.take(8192).read_to_string(&mut response).is_err() {
+        return false;
+    }
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else { return false };
+    if !headers.lines().next().is_some_and(|line| line.starts_with("HTTP/1.1 200 ") || line.starts_with("HTTP/1.0 200 ")) {
+        return false;
+    }
+    let Ok(health) = serde_json::from_str::<serde_json::Value>(body) else { return false };
+    health["status"] == "ok" && health["version"].is_string() && health["usage_schema"].is_number()
+}
+
+fn wait_for_backend(address: &str, mut child: Option<&mut Child>, timeout: Duration) -> std::io::Result<()> {
+    let started = Instant::now();
+    loop {
+        if let Some(child) = child.as_deref_mut() {
+            if let Some(status) = child.try_wait()? {
+                return Err(std::io::Error::other(format!("Backend exited during startup ({status})")));
+            }
+        }
+        if backend_ready(address) {
+            return Ok(());
+        }
+        if started.elapsed() >= timeout {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Backend health check timed out"));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn terminate_backend(process: &mut Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &process.id().to_string(), "/T", "/F"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output();
+    }
+    let _ = process.kill();
+    let _ = process.wait();
+}
 
 fn backend_paths(app: &tauri::App) -> Result<(PathBuf, PathBuf), String> {
     if cfg!(debug_assertions) {
@@ -32,6 +89,9 @@ fn backend_paths(app: &tauri::App) -> Result<(PathBuf, PathBuf), String> {
 fn start_backend(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // Reuse the backend if the browser launcher already started it.
     if TcpStream::connect("127.0.0.1:8787").is_ok() {
+        eprintln!("Waiting for the existing backend at http://127.0.0.1:8787/health ...");
+        wait_for_backend("127.0.0.1:8787", None, Duration::from_secs(60))
+            .map_err(|error| std::io::Error::other(format!("{error}. Port 8787 is occupied but Local Model Router is not ready.")))?;
         app.manage(BackendProcess(Mutex::new(None)));
         return Ok(());
     }
@@ -57,13 +117,28 @@ fn start_backend(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
         .create(true)
         .append(true)
         .open(log_dir.join("desktop-backend.log"))?;
-    let child = Command::new(python)
-        .args(["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8787"])
+    let mut command = Command::new(python);
+    command.args(["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8787"])
         .current_dir(backend_dir)
+        .env("PYTHONUNBUFFERED", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone()?))
-        .stderr(Stdio::from(log))
-        .spawn()?;
+        .stderr(Stdio::from(log));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let mut child = command.spawn()?;
+    eprintln!("Waiting for backend startup at http://127.0.0.1:8787/health ...");
+    if let Err(error) = wait_for_backend("127.0.0.1:8787", Some(&mut child), Duration::from_secs(60)) {
+        // Clean up only the process this window started; never kill a reused service.
+        if !matches!(child.try_wait(), Ok(Some(_))) {
+            terminate_backend(&mut child);
+        }
+        return Err(std::io::Error::other(format!("{error}. Backend log: {}", log_dir.join("desktop-backend.log").display())).into());
+    }
+    eprintln!("Backend ready at http://127.0.0.1:8787");
     app.manage(BackendProcess(Mutex::new(Some(child))));
     Ok(())
 }
@@ -72,19 +147,7 @@ fn stop_backend(handle: &tauri::AppHandle) {
     if let Some(state) = handle.try_state::<BackendProcess>() {
         if let Ok(mut child) = state.0.lock() {
             if let Some(mut process) = child.take() {
-                #[cfg(windows)]
-                {
-                    use std::os::windows::process::CommandExt;
-                    let pid = process.id().to_string();
-                    // The Windows Python launcher can create a runtime child process;
-                    // terminate the owned process tree so uvicorn cannot be orphaned.
-                    let _ = Command::new("taskkill")
-                        .args(["/PID", &pid, "/T", "/F"])
-                        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                        .output();
-                }
-                let _ = process.kill();
-                let _ = process.wait();
+                terminate_backend(&mut process);
             }
         }
     }
@@ -136,6 +199,7 @@ fn main() {
                 tray = tray.icon(icon.clone());
             }
             tray.build(app)?;
+            show_main_window(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())

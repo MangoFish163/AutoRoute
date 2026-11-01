@@ -98,7 +98,7 @@ class UsageTests(unittest.IsolatedAsyncioTestCase):
         dep = {'id':'test', 'name':'DS4', 'provider':'openai', 'base_url':'https://api.deepseek.com/v1'}
         router.save_event('supplier', 'openai', 'test', dep, 'success', 200, 120000, None, None, [])
         with router.connect() as db:
-            db.execute("INSERT INTO settings(key,value) VALUES('provider_presets',?)", (json.dumps({'changed':{'name':'Changed', 'base_url':dep['base_url']}}),))
+            db.execute("UPDATE settings SET value=? WHERE key='provider_presets'", (json.dumps({'changed':{'name':'Changed', 'base_url':dep['base_url']}}),))
         event = router.events()[0]
         self.assertEqual(event['supplier_name'], 'DeepSeek')
         self.assertEqual(event['supplier_source'], 'snapshot')
@@ -116,7 +116,7 @@ class UsageTests(unittest.IsolatedAsyncioTestCase):
         dep = dict(id='test', name='test', provider='openai', upstream_model='test', api_keys=['key'],
                    base_url='https://mock.invalid', timeout_seconds=5, use_system_proxy=False, proxy_url='')
         responses = iter([httpx.Response(500), httpx.Response(200, json={'usage':DEEPSEEK})])
-        with patch.object(router, 'candidates', return_value=[dep, dep]), patch.object(router, 'choose_credential', return_value=('key',0)), patch.object(router, 'record_result'), patch.object(router, 'cooldown_credential'), patch.object(router, 'time', SimpleNamespace(perf_counter=Mock(side_effect=[10,70,130]))), patch.object(router.httpx, 'AsyncClient', side_effect=lambda **_: Client(transport=httpx.MockTransport(lambda _: next(responses)))):
+        with patch.object(router, 'candidates', return_value=[dep, dep]), patch.object(router, 'choose_credential', return_value=('key',0)), patch.object(router, 'record_result'), patch.object(router, 'time', SimpleNamespace(perf_counter=Mock(side_effect=[10,70,130]))), patch.object(router.httpx, 'AsyncClient', side_effect=lambda **_: Client(transport=httpx.MockTransport(lambda _: next(responses)))):
             result = await router.forward({'model':'test'}, 'openai', 'retry')
         self.assertEqual(result[4], 120000)
         self.assertEqual(len(result[2]), 2)

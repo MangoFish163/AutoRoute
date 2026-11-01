@@ -19,6 +19,7 @@
         "minWidth": 980,
         "minHeight": 640,
         "center": true,
+        "visible": false,
         "resizable": true
       }
     ],
@@ -32,6 +33,8 @@
     "shortDescription": "Personal local model routing service",
     "resources": {
       "../../backend/app.py": "backend/app.py",
+      "../../backend/provider_presets.py": "backend/provider_presets.py",
+      "../../backend/responses_adapter.py": "backend/responses_adapter.py",
       "../../backend/requirements.txt": "backend/requirements.txt"
     }
   }
