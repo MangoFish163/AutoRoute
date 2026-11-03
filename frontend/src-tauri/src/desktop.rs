@@ -17,6 +17,8 @@ use tauri::{
 struct OwnedBackend {
     child: Child,
     _job: crate::job::Job,
+    management_token: String,
+    port: u16,
 }
 struct BackendProcess(Mutex<Option<OwnedBackend>>);
 #[derive(Clone, serde::Serialize)]
@@ -33,9 +35,9 @@ fn log_dir() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
         .join("LocalModelRouter")
 }
-fn backend_ready(instance: Option<&str>) -> bool {
+fn backend_ready(port: u16, instance: Option<&str>) -> bool {
     let Ok(mut stream) = TcpStream::connect_timeout(
-        &"127.0.0.1:8787".parse().unwrap(),
+        &format!("127.0.0.1:{port}").parse().unwrap(),
         Duration::from_millis(200),
     ) else {
         return false;
@@ -91,12 +93,6 @@ fn shutdown_backend(owned: &mut OwnedBackend) {
     let _ = owned.child.wait();
 }
 fn start_backend(app: &tauri::AppHandle) -> Result<(), String> {
-    if TcpStream::connect("127.0.0.1:8787").is_ok() {
-        if cfg!(debug_assertions) && backend_ready(None) {
-            return Ok(());
-        }
-        return Err("端口 8787 已被占用，请退出其他网关或开发版服务后重试。".into());
-    }
     let dir = if cfg!(debug_assertions) {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../backend")
     } else {
@@ -125,14 +121,29 @@ fn start_backend(app: &tauri::AppHandle) -> Result<(), String> {
         .open(log_file)
         .map_err(|e| e.to_string())?;
     let instance = uuid::Uuid::new_v4().to_string();
+    let management_token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    struct PortFile(PathBuf);
+    impl Drop for PortFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let port_file = PortFile(log_dir().join(format!("startup-{instance}.json")));
     let mut command = Command::new(exe);
     if cfg!(debug_assertions) {
         command.arg(dir.join("desktop_entry.py"));
     }
     command
+        .arg("--port-file")
+        .arg(&port_file.0)
         .current_dir(dir)
         .env("PYTHONUNBUFFERED", "1")
         .env("LOCAL_MODEL_ROUTER_DESKTOP_INSTANCE", &instance)
+        .env_remove("LOCAL_MODEL_ROUTER_MANAGEMENT_TOKEN")
         .stdin(Stdio::piped())
         .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
         .stderr(Stdio::from(log));
@@ -152,7 +163,25 @@ fn start_backend(app: &tauri::AppHandle) -> Result<(), String> {
             return Err(e.to_string());
         }
     };
-    let mut owned = OwnedBackend { child, _job: job };
+    if child
+        .stdin
+        .as_mut()
+        .ok_or("缺少后端私有通信管道")
+        .and_then(|stdin| {
+            writeln!(stdin, "{management_token}").map_err(|_| "无法初始化后端管理认证")
+        })
+        .is_err()
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("无法初始化后端管理认证".into());
+    }
+    let mut owned = OwnedBackend {
+        child,
+        _job: job,
+        management_token,
+        port: 0,
+    };
     let started = Instant::now();
     loop {
         if app.state::<Stopping>().0.load(Ordering::SeqCst) {
@@ -162,7 +191,15 @@ fn start_backend(app: &tauri::AppHandle) -> Result<(), String> {
         if let Some(status) = owned.child.try_wait().map_err(|e| e.to_string())? {
             return Err(format!("本地服务启动失败（{status}），请查看日志。"));
         }
-        if backend_ready(Some(&instance)) {
+        if let Ok(contents) = std::fs::read_to_string(&port_file.0) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) {
+                owned.port = value["port"]
+                    .as_u64()
+                    .and_then(|n| u16::try_from(n).ok())
+                    .unwrap_or(0);
+            }
+        }
+        if owned.port != 0 && backend_ready(owned.port, Some(&instance)) {
             break;
         }
         if started.elapsed() > Duration::from_secs(60) {
@@ -194,12 +231,21 @@ fn launch_backend(app: tauri::AppHandle) {
         *app.state::<StartupState>().0.lock().unwrap() = status;
     });
 }
-fn stop_backend(handle: &tauri::AppHandle) {
+pub(crate) fn stop_backend(handle: &tauri::AppHandle) {
     handle.state::<Stopping>().0.store(true, Ordering::SeqCst);
     let lifecycle = handle.state::<Lifecycle>();
     let _guard = lifecycle.0.lock().unwrap();
     if let Some(mut owned) = handle.state::<BackendProcess>().0.lock().unwrap().take() {
         shutdown_backend(&mut owned);
+    }
+}
+pub(crate) fn recover_backend_after_update(app: &tauri::AppHandle) {
+    if app.state::<Stopping>().0.swap(false, Ordering::SeqCst) {
+        *app.state::<StartupState>().0.lock().unwrap() = StartupStatus {
+            phase: "starting".into(),
+            error: None,
+        };
+        launch_backend(app.clone());
     }
 }
 #[tauri::command]
@@ -216,6 +262,31 @@ fn startup_status(app: tauri::AppHandle) -> StartupStatus {
         }
     }
     app.state::<StartupState>().0.lock().unwrap().clone()
+}
+#[tauri::command]
+fn management_token(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<String, String> {
+    if window.label() != "main" {
+        return Err("不允许的管理窗口".into());
+    }
+    let state = app.state::<BackendProcess>();
+    let mut backend = state.0.lock().unwrap();
+    let owned = backend.as_mut().ok_or("本地服务尚未就绪")?;
+    if owned
+        .child
+        .try_wait()
+        .map_err(|_| "无法检查本地服务状态")?
+        .is_some()
+    {
+        return Err("本地服务已停止".into());
+    }
+    Ok(owned.management_token.clone())
+}
+#[tauri::command]
+fn backend_url(app: tauri::AppHandle) -> Result<String, String> {
+    let state = app.state::<BackendProcess>();
+    let backend = state.0.lock().unwrap();
+    let owned = backend.as_ref().ok_or("本地服务尚未就绪")?;
+    Ok(format!("http://127.0.0.1:{}", owned.port))
 }
 #[tauri::command]
 fn retry_backend(app: tauri::AppHandle) {
@@ -253,6 +324,10 @@ pub fn run() {
         context.config_mut().identifier.push_str(".dev");
     }
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new()
+            .pubkey(include_str!("../updater-public-key.txt").trim())
+            .build())
+        .manage(crate::updates::UpdateState::default())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if args.iter().any(|a| a == "--quit") {
                 app.exit(0);
@@ -269,8 +344,13 @@ pub fn run() {
         })))
         .invoke_handler(tauri::generate_handler![
             startup_status,
+            management_token,
+            backend_url,
             retry_backend,
-            open_log_directory
+            open_log_directory,
+            crate::updates::check_app_update,
+            crate::updates::download_app_update,
+            crate::updates::install_app_update
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {

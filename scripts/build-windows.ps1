@@ -3,12 +3,15 @@ param(
     [switch]$SkipDependencyInstall,
     [switch]$TestInstaller,
     [switch]$RequireSigning,
+    [switch]$RequireUpdaterSigning,
     [string]$CertificateThumbprint = $env:LMR_CERTIFICATE_THUMBPRINT,
     [string]$TimestampUrl = $env:LMR_TIMESTAMP_URL
 )
 $ErrorActionPreference = 'Stop'
 $projectDir = Split-Path -Parent $PSScriptRoot
 $signingConfigPath = $null
+$updaterConfigPath = $null
+if ($RequireUpdaterSigning -and (-not $env:TAURI_SIGNING_PRIVATE_KEY -or -not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) { throw 'Set TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD before publishing client updates.' }
 if ($RequireSigning -and -not $CertificateThumbprint) { throw 'Signed release requires LMR_CERTIFICATE_THUMBPRINT and LMR_TIMESTAMP_URL. Unsigned builds are for testing only.' }
 if ($CertificateThumbprint -and ($CertificateThumbprint -notmatch '^[0-9a-fA-F]{40}$' -or $TimestampUrl -notmatch '^https?://')) { throw 'Invalid signing certificate thumbprint or timestamp URL.' }
 Push-Location $projectDir
@@ -36,6 +39,8 @@ try {
     Push-Location backend
     try { & $buildPython -m unittest discover -p 'test_*.py'; if ($LASTEXITCODE -ne 0) { throw 'Backend tests failed.' } }
     finally { Pop-Location }
+    npm --prefix frontend test
+    if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed.' }
     & $buildPython -m PyInstaller --noconfirm --distpath build/dist --workpath build/pyinstaller packaging/backend.spec
     if ($LASTEXITCODE -ne 0) { throw 'Backend freezing failed.' }
     if ($CertificateThumbprint) {
@@ -48,18 +53,31 @@ try {
     }
     & $buildPython packaging/smoke_backend.py build/dist/backend/router-backend.exe
     if ($LASTEXITCODE -ne 0) { throw 'Frozen backend smoke failed.' }
+    if ($env:TAURI_SIGNING_PRIVATE_KEY) {
+        $updaterConfigPath = Join-Path $projectDir 'build/tauri.updater.json'
+        @{
+            bundle = @{ createUpdaterArtifacts = $true }
+            plugins = @{ updater = @{
+                pubkey = [IO.File]::ReadAllText((Join-Path $projectDir 'frontend/src-tauri/updater-public-key.txt')).Trim()
+                windows = @{ installMode = 'passive' }
+            } }
+        } | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 $updaterConfigPath
+    }
     Push-Location frontend
     try {
+        cargo test --manifest-path src-tauri/Cargo.toml --locked --bin local-model-router
+        if ($LASTEXITCODE -ne 0) { throw 'Desktop updater tests failed.' }
         $tauriArguments = @('build', '--config', 'src-tauri/tauri.release.json')
         if ($signingConfigPath) { $tauriArguments += @('--config', $signingConfigPath) }
+        if ($updaterConfigPath) { $tauriArguments += @('--config', $updaterConfigPath) }
         $tauriArguments += @('--bundles', 'nsis', '--', '--locked')
         npm run tauri -- @tauriArguments
         if ($LASTEXITCODE -ne 0) { throw 'Windows installer build failed.' }
     }
     finally { Pop-Location }
     $bundleRoot = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $projectDir 'frontend/src-tauri/target' }
-    $installers = @(Get-ChildItem -LiteralPath (Join-Path $bundleRoot 'release/bundle/nsis') -Filter '*-setup.exe')
-    if ($installers.Count -ne 1) { throw 'Expected one NSIS installer.' }
+    $installers = @(Get-ChildItem -LiteralPath (Join-Path $bundleRoot 'release/bundle/nsis') -Filter "*_${version}_x64-setup.exe")
+    if ($installers.Count -ne 1) { throw 'Expected one NSIS installer for the current version and Windows x64.' }
     if ($CertificateThumbprint) {
         foreach ($signedFile in @($installers[0].FullName, (Join-Path $bundleRoot 'release/local-model-router.exe'))) {
             $signature = Get-AuthenticodeSignature -LiteralPath $signedFile
@@ -69,6 +87,16 @@ try {
     New-Item -ItemType Directory -Force release | Out-Null
     $output = Join-Path $projectDir 'release/win-x64-setup.exe'
     Copy-Item -LiteralPath $installers[0].FullName -Destination $output
+    $signatureOutput = "$output.sig"
+    if ($updaterConfigPath) {
+        $signatureSource = "$($installers[0].FullName).sig"
+        if (-not (Test-Path -LiteralPath $signatureSource)) { throw 'Updater signature was not produced.' }
+        Copy-Item -LiteralPath $signatureSource -Destination $signatureOutput
+        & $buildPython packaging/check_updater_signature.py (Join-Path $bundleRoot 'release/local-model-router.exe') $output $signatureOutput
+        if ($LASTEXITCODE -ne 0) { throw 'Updater signature validation failed.' }
+    } elseif (Test-Path -LiteralPath $signatureOutput) {
+        Remove-Item -LiteralPath $signatureOutput
+    }
     $hash = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $([IO.Path]::GetFileName($output))" | Set-Content -Encoding ascii release/SHA256SUMS.txt
     if ($TestInstaller) {
@@ -84,5 +112,6 @@ try {
 }
 finally {
     if ($signingConfigPath) { Remove-Item -LiteralPath $signingConfigPath -ErrorAction SilentlyContinue }
+    if ($updaterConfigPath) { Remove-Item -LiteralPath $updaterConfigPath -ErrorAction SilentlyContinue }
     Pop-Location
 }

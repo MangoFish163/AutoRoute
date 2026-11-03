@@ -17,7 +17,7 @@ foreach ($id in @($processes.backend, $processes.frontend)) {
     if (-not $id) { continue }
     $root = $allProcesses | Where-Object { $_.ProcessId -eq $id } | Select-Object -First 1
     if (-not $root) { continue }
-    $owned = ($root.CommandLine -match 'uvicorn app:app.*--port 8787') -or ($root.CommandLine -match 'node_modules\\vite\\bin\\vite\.js')
+    $owned = ($root.CommandLine -match 'uvicorn app:app|desktop_entry\.py.*--port-file') -or ($root.CommandLine -match 'node_modules\\vite\\bin\\vite\.js')
     if (-not $owned) {
         Write-Warning "Skipping PID $id because it no longer matches a Local Model Router process."
         continue

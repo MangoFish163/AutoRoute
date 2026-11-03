@@ -107,6 +107,23 @@ def run_installer(executable, signer_thumbprint=None):
             execute([installer, '/S', '/NS', f'/D={target}'])
             assert marker.exists(), 'Repair deleted an unrelated file'
             assert backend.exists(), 'Repair did not install backend'
+            # Exercise the updater's passive /UPDATE path without /R so this
+            # isolated smoke never starts a desktop or touches a live gateway.
+            data = profile / '.local-model-router'
+            data.mkdir(exist_ok=True)
+            protected = {
+                'client.key': b'test-local-key',
+                'network.json': b'{"port": 19999}',
+                'router.db': b'test-database-preservation-marker',
+            }
+            for name, content in protected.items():
+                (data / name).write_bytes(content)
+            execute([installer, '/P', '/UPDATE', '/NS'])
+            assert installed(), 'Update lost uninstall registration'
+            assert backend.exists(), 'Update failed to restore backend at the custom install path'
+            assert marker.exists(), 'Update deleted an unrelated file'
+            for name, content in protected.items():
+                assert (data / name).read_bytes() == content, f'Update changed user data: {name}'
             # Normal launch MUST copy to TEMP and start the real uninstaller,
             # exactly like Windows Settings. _?= bypasses that stage and hid
             # the unsigned temporary executable failure on policy-enabled PCs.
@@ -119,13 +136,12 @@ def run_installer(executable, signer_thumbprint=None):
             assert not (target / 'local-model-router.exe').exists(), 'Main executable remains'
             assert marker.exists(), 'Uninstall deleted an unrelated file'
             # Exercise actual frozen cleanup against an explicit disposable profile.
-            data = profile / '.local-model-router'
-            data.mkdir()
+            data.mkdir(exist_ok=True)
             (data / 'client.key').write_text('test-only')
             source_backend = Path('build/dist/backend/router-backend.exe').resolve()
             execute([str(source_backend), '--cleanup', '--remove-data'])
             assert not data.exists(), 'Explicit data cleanup failed'
-            print('Installer smoke passed: Chinese/spaced path, installed backend, repair, '
+            print('Installer smoke passed: Chinese/spaced path, installed backend, repair, passive update, data preservation, '
                   'uninstall registration, unknown-file preservation, isolated data cleanup.')
         except BaseException as error:
             error.add_note(f'Installer failure artifacts preserved at {root}; no alternate uninstall launch was attempted.')

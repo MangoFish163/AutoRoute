@@ -31,7 +31,47 @@ CI 手动触发或推送与版本匹配的 `v*` 标签都会执行云端构建�
 
 手动操作：GitHub 仓库 → Actions → Windows unsigned prerelease → Run workflow。标签操作：更新三处版本号及锁文件后，推送例如 `v0.1.1` 或 `v0.1.1-unsigned.1`。已经公开的版本不会被自动覆盖；重跑前需检查留下的草稿，或者使用新标签。
 
-该工作流显式关闭签名，不读取签名 Secrets，缺少证书不会阻止构建或发布。发布文案说明未签名和 Windows 应用控制可能拦截正常卸载的限制。将来获得 SignPath 后再接入独立的签名与正式发布流程。
+该工作流显式关闭 **Windows 代码签名**，不读取证书配置，缺少代码签名证书不会阻止构建或发布；客户端更新所需的 **Tauri 更新签名** 必须配置，见下文。发布文案说明未签名和 Windows 应用控制可能拦截正常卸载的限制。将来获得 SignPath 后再接入独立的签名与正式发布流程。
+
+## 客户端更新（0.1.1 起）
+
+桌面端启动两秒后在后台检查更新；设置页提供手动检查、通道选择、更新说明、下载进度和失败重试。检查和下载不影响网关。下载完成并验证签名后，由用户选择“重启并安装”；原生端再次验签，停止自己启动的后端，使用 NSIS 被动更新模式安装并重新打开。启动安装器失败时尝试恢复后端。开发构建禁止安装更新；浏览器版只展示当前版本。
+
+当前默认订阅测试版 `preview`。工作流先将安装器、签名和清单作为草稿资产完整上传，再公开 Release，最后通过 GitHub Git API 原子更新独立 `updates` 分支的 `preview.json`。客户端从该分支读取清单，包地址指向不可变的版本标签，支持 Pre-release，且不依赖 GitHub `latest`。公开仓库无需用户登录；私有仓库不能直接使用此分发方式。客户端通道地址固定在 `frontend/src-tauri/src/updates.rs`，迁移仓库或 CDN 时需要同步调整。
+
+`stable` 通道地址与发布脚本已支持，但当前未签名工作流只发布 `preview`；没有正式发布时切换稳定版会显示无法获取信息。后续正式发布流程可调用 `.github/scripts/publish-update.cjs` 的 `publish({ github, context, channel: 'stable' })` 发布相同格式的 `release/stable.json`，应在完成 Windows 签名和正式版验收后启用。切换通道不会降级应用。
+
+### 首次配置签名
+
+本项目的更新公钥位于 `frontend/src-tauri/updater-public-key.txt`，随代码提交；匹配的加密私钥和随机密码保存在开发机仓库外的 `%USERPROFILE%\.tauri\autoroute-updater\`，目录权限只保留当前用户。**必须安全备份该目录；丢失私钥后，已安装客户端无法接受换钥后的更新。** 不要重新生成密钥来修复 CI 配置。
+
+在仓库 Settings → Secrets and variables → Actions 中添加两个 Repository secrets：
+
+| Secret | 本机对应文件内容 |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | `%USERPROFILE%\.tauri\autoroute-updater\updater.key` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | `%USERPROFILE%\.tauri\autoroute-updater\password.txt` |
+
+使用文件的完整文本，不是路径。私钥和密码不要提交到 Git、写入日志或发到聊天。`scripts/prepare-updater.ps1` 可用于首次生成；已有密钥时只复用，并拒绝覆盖不同的仓库公钥。新构建机应从安全备份恢复现有密钥。
+
+本地构建带更新签名的安装器：
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = Join-Path $env:USERPROFILE '.tauri/autoroute-updater/updater.key'
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [IO.File]::ReadAllText((Join-Path $env:USERPROFILE '.tauri/autoroute-updater/password.txt'))
+.\scripts\build-windows.ps1 -RequireUpdaterSigning -Python C:\Path\To\Python312\python.exe
+```
+
+流水线强制 `-RequireUpdaterSigning`，缺少密钥或密码会在构建开始前失败；生成 `.sig` 后还会用最终桌面 EXE 的 `--verify-update` 入口验证安装包与内置公钥匹配，并拒绝被修改的安装包与损坏的签名，失败不发布。无私钥的本地构建可以不传此参数用于内部测试，但不能发布到更新通道，也不会沿用旧 `.sig`。
+
+### 后续版本发布
+
+1. 提升三处应用版本号并刷新锁文件；每次分发给用户的更新都要递增应用版本。仅变化标签后缀或工作流运行号不会成为新版本。
+2. 更新 `packaging/release-notes.md`，提交代码后推送匹配的版本标签，例如 `v0.1.2`。
+3. CI 执行测试和构建，验证更新签名，生成 `preview.json`，公开测试版，再更新通道清单。缺少签名、同版本重发或版本倒退会拒绝发布。
+4. 用户首次手动安装带更新器的新版；后续从客户端检查、下载并重启安装。启动更新会短暂中断网关，界面会提醒等待当前请求结束。数据库迁移仍按上文要求单独实现；当前没有新增 schema。
+
+新增资产为 `win-x64-setup.exe.sig` 和 `preview.json`，安装器与 `SHA256SUMS.txt` 的命名保持不变。可重新下载安装器手动修复；本功能不提供程序文件的自动事务回滚。
 
 公开分发前在隔离的 Windows 10/11 x64 虚拟机中验证：无开发工具、缺少 WebView2 时联网补装、下载失败后的错误提示与重试、中文/空格路径、8787 冲突、进程异常退出、默认卸载、彻底卸载、同版本修复和覆盖升级。构建环境的 PATH 隔离检查不能替代干净系统验证。
 

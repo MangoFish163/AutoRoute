@@ -11,7 +11,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: unsigned-release-${{ github.ref }}-${{ github.event.inputs.release_tag || github.run_number }}
+  group: windows-release
   cancel-in-progress: false
 jobs:
   package:
@@ -38,6 +38,11 @@ jobs:
           $global:LASTEXITCODE = 0
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Validate update channel version
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await require('./.github/scripts/publish-update.cjs').publish({ github, context, preflight: true });
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -52,14 +57,30 @@ jobs:
         run: rustup update stable
       - name: Build and validate
         shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          ./scripts/build-windows.ps1 -TestInstaller -RequireSigning:$false -CertificateThumbprint '' -TimestampUrl ''
+          ./scripts/build-windows.ps1 -TestInstaller -RequireUpdaterSigning -RequireSigning:$false -CertificateThumbprint '' -TimestampUrl ''
+      - name: Generate preview update manifest
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          python -m unittest discover -s packaging -p 'test_updater*.py'
+          if ($LASTEXITCODE -ne 0) { throw 'Updater manifest tests failed.' }
+          node --test .github/scripts/publish-update.test.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'Updater feed tests failed.' }
+          python packaging/updater_manifest.py --repository $env:GITHUB_REPOSITORY --tag $env:RELEASE_TAG --notes-file packaging/release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'Updater manifest generation failed.' }
       - uses: actions/upload-artifact@v4
         with:
           name: win-x64
           path: |
             release/win-x64-setup.exe
+            release/win-x64-setup.exe.sig
             release/SHA256SUMS.txt
+            release/preview.json
           if-no-files-found: error
           retention-days: 14
       - name: Publish unsigned prerelease
@@ -80,14 +101,20 @@ jobs:
             '此版本未经代码签名，尚未接入 SignPath。Windows 应用控制可能阻止安装、运行或正常卸载；本测试版不保证可在启用相关策略的系统上使用。',
             '',
             '下载 win-x64-setup.exe 安装；SHA256SUMS.txt 用于校验下载文件。无需 Python、Node.js 或 Rust；系统缺少 WebView2 时安装器自动联网补装。',
+            '客户端可在系统设置中检查、下载并安装后续测试版更新。更新包带有 Tauri 更新签名（与 Windows 代码签名不同）。首次从旧版迁移仍需手动安装一次。',
             '',
-            '服务仅面向可信本机使用。管理 API 当前没有独立鉴权，请勿将本地端口暴露到局域网或公网。',
+            '服务仅面向可信本机使用。管理 API 使用应用自动维护的独立令牌，请勿将本地端口暴露到局域网或公网。',
             '',
             '安装、正常卸载与独立后端冒烟测试已在本次 Windows 构建环境执行；这不等于所有 Windows 安全策略下均已验收。'
           ) -join "`n"
           $notesPath = Join-Path $env:RUNNER_TEMP 'unsigned-release-notes.md'
           [IO.File]::WriteAllText($notesPath, $notes, [Text.UTF8Encoding]::new($false))
-          gh release create $env:RELEASE_TAG --target $env:GITHUB_SHA --draft --prerelease --latest=false --title "$env:RELEASE_TAG - Unsigned test build" --notes-file $notesPath $installer release/SHA256SUMS.txt
+          gh release create $env:RELEASE_TAG --target $env:GITHUB_SHA --draft --prerelease --latest=false --title "$env:RELEASE_TAG - Unsigned test build" --notes-file $notesPath $installer release/SHA256SUMS.txt release/win-x64-setup.exe.sig release/preview.json
           if ($LASTEXITCODE -ne 0) { throw 'Could not create prerelease or upload its assets; inspect any remaining draft before retrying.' }
           gh release edit $env:RELEASE_TAG --draft=false --prerelease --latest=false
           if ($LASTEXITCODE -ne 0) { throw 'Assets uploaded but prerelease publication failed; draft remains.' }
+      - name: Publish preview update feed atomically
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await require('./.github/scripts/publish-update.cjs').publish({ github, context });

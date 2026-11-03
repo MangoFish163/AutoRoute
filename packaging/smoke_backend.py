@@ -1,6 +1,7 @@
 """Exercise the frozen backend with no Python/Node directories on PATH."""
 import json
 import os
+import secrets
 from pathlib import Path
 import socket
 import subprocess
@@ -8,6 +9,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import urllib.error
 
 
 def smoke(executable):
@@ -25,6 +27,9 @@ def smoke(executable):
                                        stdout=log, stderr=log,
                                        creationflags=subprocess.CREATE_NO_WINDOW)
             try:
+                management_token = secrets.token_hex(32)
+                process.stdin.write((management_token + '\n').encode('ascii'))
+                process.stdin.flush()
                 for _ in range(150):
                     if process.poll() is not None:
                         log.seek(0)
@@ -40,7 +45,16 @@ def smoke(executable):
                 assert health['instance'] == 'packaging-smoke', health
                 assert health['application'] == 'com.localmodelrouter.desktop', health
                 for endpoint in ['/api/bootstrap', '/api/settings', '/api/deployments']:
-                    with urllib.request.urlopen(f'http://127.0.0.1:{port}{endpoint}', timeout=5) as response:
+                    url = f'http://127.0.0.1:{port}{endpoint}'
+                    try:
+                        urllib.request.urlopen(url, timeout=5)
+                    except urllib.error.HTTPError as error:
+                        assert error.code == 401, error.code
+                        error.close()
+                    else:
+                        raise AssertionError('Management API accepted an unauthenticated request')
+                    request = urllib.request.Request(url, headers={'X-Management-Token': management_token})
+                    with urllib.request.urlopen(request, timeout=5) as response:
                         assert response.status == 200
                 key_path = home / 'data' / 'client.key'
                 assert key_path.exists()
