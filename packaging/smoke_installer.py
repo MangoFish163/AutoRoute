@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -16,6 +17,42 @@ from smoke_backend import smoke
 
 KEY = (r'Software\Microsoft\Windows\CurrentVersion\Uninstall' + '\\'
        + os.environ.get('LOCAL_MODEL_ROUTER_TEST_PRODUCT', 'Local Model Router'))
+
+
+def cleanup_disposable_directory(temporary):
+    root = Path(temporary).absolute()
+    if root.parent != Path(tempfile.gettempdir()).absolute() or not root.name.startswith('router-installer-'):
+        raise ValueError(f'Refusing unexpected test cleanup root: {root}')
+
+    def remove_readonly(function, path, error):
+        candidate = Path(path).absolute()
+        if not candidate.is_relative_to(root):
+            raise error
+        # Shell-created Start Menu folders may carry the read-only attribute.
+        # Change only that attribute inside our disposable tree, never ACLs or links.
+        info = candidate.lstat()
+        attrs = getattr(info, 'st_file_attributes', 0)
+        if not isinstance(error, PermissionError) or attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise error
+        if not attrs & stat.FILE_ATTRIBUTE_READONLY:
+            raise error
+        os.chmod(candidate, stat.S_IWRITE)
+        function(path)
+
+    for attempt in range(12):
+        try:
+            shutil.rmtree(root, onexc=remove_readonly)
+            return
+        except FileNotFoundError:
+            if not root.exists():
+                return
+            raise
+        except PermissionError:
+            # Normal NSIS uninstall returns from its initial process before the
+            # TEMP child exits. Give that child time to release its directory.
+            if attempt == 11:
+                raise
+            time.sleep(.5)
 
 
 def installed():
@@ -95,7 +132,7 @@ def run_installer(executable, signer_thumbprint=None):
             raise
     finally:
         if not installed():
-            shutil.rmtree(temporary)
+            cleanup_disposable_directory(temporary)
 
 
 if __name__ == '__main__':
