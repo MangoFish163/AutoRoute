@@ -171,6 +171,17 @@ pub(crate) async fn install_app_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_config_initializes_updater_without_release_overrides() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let updater: tauri_plugin_updater::Config =
+            serde_json::from_value(config["plugins"]["updater"].clone())
+                .expect("base Tauri config must contain a valid updater configuration");
+        assert_eq!(updater.pubkey, include_str!("../updater-public-key.txt").trim());
+    }
+
     #[test]
     fn update_channels_cannot_supply_arbitrary_urls() {
         assert!(endpoint("preview")
