@@ -23,19 +23,35 @@
         "resizable": true
       }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
-    "icon": ["icons/icon.ico"],
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "Personal local model routing service",
-    "resources": {
-      "../../backend/app.py": "backend/app.py",
-      "../../backend/provider_presets.py": "backend/provider_presets.py",
-      "../../backend/responses_adapter.py": "backend/responses_adapter.py",
-      "../../backend/requirements.txt": "backend/requirements.txt"
+    "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false,
+        "template": "windows/installer.nsi",
+        "installerHooks": "windows/hooks.nsh",
+        "compression": "zlib"
+      }
     }
   }
 }

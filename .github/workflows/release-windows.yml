@@ -1,0 +1,91 @@
+name: Windows unsigned prerelease
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional tag matching the application version; blank generates a unique unsigned tag'
+        required: false
+        type: string
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: unsigned-release-${{ github.ref }}-${{ github.event.inputs.release_tag || github.run_number }}
+  cancel-in-progress: false
+jobs:
+  package:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate version and select release tag
+        id: release
+        shell: pwsh
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          $version = (Get-Content frontend/package.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Expected a numeric application version.' }
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } elseif ($env:REQUESTED_TAG) { $env:REQUESTED_TAG } else { "v$version-unsigned.$env:GITHUB_RUN_NUMBER" }
+          $pattern = '^v' + [regex]::Escape($version) + '(?:-(?:unsigned|alpha|beta|rc)(?:[.-][0-9A-Za-z]+)*)?$'
+          if ($tag -cnotmatch $pattern) { throw 'Release tag must match the application version (for example v0.1.0 or v0.1.0-unsigned.1).' }
+          $existing = git rev-parse --verify --quiet "refs/tags/$tag^{commit}"
+          if ($LASTEXITCODE -eq 0 -and $existing -ne $env:GITHUB_SHA) { throw 'Existing tag points at another commit.' }
+          $global:LASTEXITCODE = 0
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Prepare Rust
+        shell: pwsh
+        run: rustup update stable
+      - name: Build and validate
+        shell: pwsh
+        run: |
+          ./scripts/build-windows.ps1 -TestInstaller -RequireSigning:$false -CertificateThumbprint '' -TimestampUrl ''
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-unsigned-installer
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish unsigned prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          APP_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          $installer = "release/LocalModelRouter-$env:APP_VERSION-windows-x64-setup.exe"
+          if ((Get-AuthenticodeSignature -LiteralPath $installer).Status -ne 'NotSigned') { throw 'This workflow publishes unsigned test builds only.' }
+          $notes = @(
+            '# Windows 未签名测试版 / Unsigned test build',
+            '',
+            "应用版本：$env:APP_VERSION；构建提交：$env:GITHUB_SHA。",
+            '',
+            '此版本未经代码签名，尚未接入 SignPath。Windows 应用控制可能阻止安装、运行或正常卸载；本测试版不保证可在启用相关策略的系统上使用。',
+            '',
+            '下载 setup.exe 安装；SHA256SUMS.txt 用于校验下载文件。无需 Python、Node.js 或 Rust；系统缺少 WebView2 时安装器自动联网补装。',
+            '',
+            '服务仅面向可信本机使用。管理 API 当前没有独立鉴权，请勿将本地端口暴露到局域网或公网。',
+            '',
+            '安装、正常卸载与独立后端冒烟测试已在本次 Windows 构建环境执行；这不等于所有 Windows 安全策略下均已验收。'
+          ) -join "`n"
+          $notesPath = Join-Path $env:RUNNER_TEMP 'unsigned-release-notes.md'
+          [IO.File]::WriteAllText($notesPath, $notes, [Text.UTF8Encoding]::new($false))
+          gh release create $env:RELEASE_TAG --target $env:GITHUB_SHA --draft --prerelease --latest=false --title "$env:RELEASE_TAG - Unsigned test build" --notes-file $notesPath $installer release/SHA256SUMS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create prerelease or upload its assets; inspect any remaining draft before retrying.' }
+          gh release edit $env:RELEASE_TAG --draft=false --prerelease --latest=false
+          if ($LASTEXITCODE -ne 0) { throw 'Assets uploaded but prerelease publication failed; draft remains.' }

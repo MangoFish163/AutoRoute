@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "../../build/dist/backend/": "backend/",
+      "windows/LICENSE_TAURI_MIT": "licenses/tauri-template.txt"
+    }
+  }
+}

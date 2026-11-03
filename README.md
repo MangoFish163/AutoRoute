@@ -1,4 +1,14 @@
-# 本地模型路由器（初版）
+# 本地模型路由器
+
+普通 Windows 用户请前往 [Windows 安装版发布页](https://github.com/MangoFish163/AutoRoute/releases) 下载 `LocalModelRouter-<版本>-windows-x64-setup.exe`（自动发布的未签名测试版位于 Pre-release）。双击安装，可选择应用位置；无需 Python、Node.js 或开发环境。首期目标平台为 Windows 10/11 x64。
+
+当前本地产物仍是未签名测试包：已确认它的临时卸载程序在本机应用控制策略下被拦截，正常卸载尚未验收通过，不应作为正式发布。签名构建和正常卸载测试已补齐，仍需配置符合目标系统策略的代码签名证书。详情见 [验收记录](packaging/验收记录.md)。
+
+安装后从桌面或开始菜单打开；关闭窗口会隐藏到托盘，右键托盘选择“退出应用”可停止网关。卸载入口位于 Windows“设置 → 应用”，默认保留配置，可勾选删除模型配置、密钥和历史记录。升级时运行新安装器，沿用原目录并保留数据。
+
+仅提供轻量安装版，内置后端运行时和依赖；检测到系统缺少 WebView2 时，安装器自动联网下载并补装，无需用户手动配置环境。安装和访问模型供应商需要网络连接，使用模型还需有效上游密钥。
+
+构建与发布维护见 [Windows 发布说明](packaging/README.md)，完整产品方案见 [Windows 安装与分发设计](Windows安装与分发设计.md)。
 
 Windows 单机个人使用的本地模型网关。支持多个 OpenAI/Anthropic 协议部署、多个 Token 轮换、代理配置、基础路由权重、失败冷却、SQLite 请求日志和 AI 调优审计。
 
@@ -13,9 +23,9 @@ Windows 单机个人使用的本地模型网关。支持多个 OpenAI/Anthropic 
 - Windows 上游 Token 使用 DPAPI 加密后存入 SQLite；非 Windows 开发环境仅用于本地调试，使用 `plain:` 标记。
 - “启用环境代理”为模型的代理总开关：未勾选时始终直连，忽略自定义 URL、系统代理和环境代理变量；勾选且填写自定义代理 URL 时使用该地址，留空时读取 Windows 当前用户 Internet Settings 中启用的静态 HTTP/HTTPS 代理（未配置系统代理时使用 HTTP 客户端环境代理变量）。普通请求、流式请求、连接测试和模型列表获取使用同一规则。PAC/WPAD 自动代理脚本暂不支持。
 - 规则依据真实请求被动调整；当前尚无后台定时探测任务或 Redis 缓存。
-- 新增 Tauri 原生桌面窗口开发入口；Windows 安装包目前仍是后续工作，需将 Python 后端及其运行时一起打包。
+- Tauri 原生桌面窗口、独立后端运行包、可选择目录的中文 Windows 安装器，以及默认保留配置的卸载流程。
 
-## 启动方式
+## 开发者启动方式
 
 需要 Python 3.11+、Node.js 20+ 和 npm。可以运行根目录的 `start.ps1` 自动创建虚拟环境、安装依赖并启动本地服务；运行 `stop.ps1` 停止服务。也可以手动启动：
 
@@ -41,7 +51,7 @@ npm run dev
 
 需要 Rust/Cargo、Python 3.11+、Node.js 20+。首次可运行 `start.ps1` 准备 Python 与前端依赖，随后运行 `stop.ps1` 停止浏览器版服务，再运行根目录的 `start-desktop.ps1`。Tauri 会从 `5175` 至 `5200` 自动选择空闲端口。点击窗口关闭按钮会隐藏到 Windows 系统托盘，托盘图标左键可重新打开窗口，右键菜单可退出应用；退出时会停止桌面端自己启动的后端。若 8787 端口已有服务，桌面窗口会复用它，不会擅自终止该外部进程。桌面端启动的后端日志写入 `%LOCALAPPDATA%\LocalModelRouter\desktop-backend.log`。
 
-该入口目前用于本地开发，不代表已完成可独立分发的 Windows 安装版。安装包需要进一步集成独立 Python 运行时和冻结后的后端依赖；现在打包后直接运行仍可能依赖系统 Python 与已安装依赖。
+该入口用于本地开发；独立安装版请使用根目录 `scripts/build-windows.ps1` 构建。发布构建通过 PyInstaller 封装后端并使用 `tauri.release.json` 打包，不依赖用户的系统 Python。
 
 服务第一次启动后会生成本地客户端 API Key。管理页面“概览”中可查看 Base URL 和 Key。默认上游数据目录为 `%USERPROFILE%\.local-model-router`，包括 SQLite 数据库和本地客户端 Key。
 

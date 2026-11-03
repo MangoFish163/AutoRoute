@@ -8,6 +8,7 @@ import os
 import random
 import secrets
 import sqlite3
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -222,7 +223,9 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Local Model Router", version="0.1.0", lifespan=lifespan)
+_version_file = (Path(sys._MEIPASS) / "metadata" / "package.json") if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1] / "frontend" / "package.json"
+APP_VERSION = json.loads(_version_file.read_text(encoding="utf-8"))["version"]
+app = FastAPI(title="Local Model Router", version=APP_VERSION, lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://tauri.localhost", "https://tauri.localhost", "tauri://localhost"],
                    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Content-Type"])
 
@@ -844,14 +847,16 @@ async def proxy_request(request: Request, inbound: str, authorization: str | Non
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": app.version, "usage_schema": 2}
+    return {"status": "ok", "version": app.version, "usage_schema": 2,
+            "application": "com.localmodelrouter.desktop", "api_version": 1,
+            "instance": os.environ.get("LOCAL_MODEL_ROUTER_DESKTOP_INSTANCE", "")}
 
 
 @app.get("/api/bootstrap")
 def bootstrap():
     with connect() as db:
         count = db.execute("SELECT COUNT(*) FROM deployments").fetchone()[0]
-    return {"base_url": "http://127.0.0.1:8787/v1", "client_key": client_key(), "deployment_count": count}
+    return {"base_url": "http://127.0.0.1:8787/v1", "client_key": client_key(), "deployment_count": count, "data_dir": str(APP_DIR.resolve())}
 
 
 @app.get("/api/deployments")
@@ -1296,5 +1301,5 @@ async def anthropic_messages(request: Request, x_api_key: str | None = Header(de
 
 
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
-if FRONTEND_DIST.exists():
+if not getattr(sys, "frozen", False) and FRONTEND_DIST.exists():
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")

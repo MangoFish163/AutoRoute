@@ -1,3 +1,4 @@
+import DesktopStartup from './DesktopStartup'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createPortal } from 'react-dom'
@@ -288,4 +289,4 @@ function ModelRow({dep:d,onSelect,onEdit,onDelete,expanded=false}) { const healt
 function EventRow({event:e,fmtTime}) {return <div className="event-row"><div className={`event-status ${e.status==='success'?'ok':'fail'}`}>{e.status==='success'?<Check size={13}/>:<X size={13}/>}</div><div className="event-main"><b>{e.alias||'未匹配模型'}</b><small>{e.deployment_name||e.error_message||'路由请求'}</small></div><Badge>{e.protocol==='anthropic'?'ANTHROPIC':'OPENAI'}</Badge><span className="event-time">{formatDuration(e.latency_ms)} <small>{fmtTime(e.created_at)}</small></span></div>}
 function Empty({title,body,action}){return <div className="empty-state"><div className="empty-icon"><Cpu size={21}/></div><b>{title}</b><p>{body}</p>{action&&<button className="button primary small" onClick={action}><Plus size={14}/>添加模型</button>}</div>}
 
-createRoot(document.getElementById('root')).render(<App/>)
+createRoot(document.getElementById('root')).render(<DesktopStartup><App/></DesktopStartup>)

@@ -11,3 +11,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 serde_json = "1"
 tauri = { version = "2", features = ["tray-icon"] }
+
+serde = { version = "1", features = ["derive"] }
+tauri-plugin-single-instance = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }
