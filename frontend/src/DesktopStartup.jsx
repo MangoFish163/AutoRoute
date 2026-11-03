@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { invoke, isTauri } from '@tauri-apps/api/core'
+import { Radio } from 'lucide-react'
+import './DesktopStartup.css'
 
 export default function DesktopStartup({ children }) {
   const desktop = isTauri()
@@ -22,17 +24,24 @@ export default function DesktopStartup({ children }) {
     return () => { active = false; clearTimeout(timer) }
   }, [desktop])
   if (status.phase === 'ready') return children
+  if (status.phase !== 'error') return <main className="desktop-startup" role="status" aria-live="polite" aria-busy="true">
+    <div className="desktop-startup-loader" aria-hidden="true">
+      <span className="desktop-startup-ring"/>
+      <span className="desktop-startup-icon"><Radio size={26} strokeWidth={1.8}/></span>
+    </div>
+    <span className="desktop-startup-label">正在启动本地服务…</span>
+  </main>
   const action = async name => {
     try { setActionError(''); await invoke(name) } catch (error) { setActionError(String(error)) }
   }
-  return <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 32 }}>
+  return <main className="desktop-startup">
     <section style={{ maxWidth: 540 }} role="status" aria-live="polite">
-      <h1>{status.phase === 'error' ? '本地服务未能启动' : '正在启动本地服务…'}</h1>
-      <p>{status.error || '首次启动可能需要一些时间，服务就绪后将自动进入管理面板。'}</p>
-      {status.phase === 'error' && <div style={{ display: 'flex', gap: 12 }}>
+      <h1>本地服务未能启动</h1>
+      <p>{status.error}</p>
+      <div style={{ display: 'flex', gap: 12 }}>
         <button className="button primary" onClick={() => action('retry_backend')}>重试</button>
         <button className="button" onClick={() => action('open_log_directory')}>打开日志目录</button>
-      </div>}
+      </div>
       {actionError && <p role="alert">{actionError}</p>}
     </section>
   </main>

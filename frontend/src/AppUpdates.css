@@ -1,0 +1,15 @@
+.app-updates{min-width:0}
+.update-channel{display:flex!important;align-items:center;justify-content:space-between;gap:12px;margin:12px 0;color:#667180}
+.update-channel select{width:auto;min-width:110px;padding:6px 10px;border:1px solid #dfe5ed;border-radius:6px;background:#fff;color:#344054;font:inherit}
+.update-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.update-release{margin-top:12px;padding:12px;border:1px solid #e3e8ef;border-radius:7px;background:#f8faff}
+.update-release small{display:block;margin-top:4px;color:#7b8795}
+.update-release p{white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow-y:auto;line-height:1.7;font-size:11px;margin-bottom:0}
+.app-updates progress{width:100%;margin-top:12px;accent-color:#5573e8}
+.app-updates progress+p{font-size:11px;color:#7b8795}
+.update-error{font-size:11px;line-height:1.6;color:#b54735;overflow-wrap:anywhere}
+.update-notice{position:fixed;bottom:22px;right:24px;z-index:900;display:flex;align-items:center;gap:12px;padding:12px 14px;background:#fff;border:1px solid #ccd8ef;border-radius:10px;box-shadow:0 6px 28px #24354b24;font-size:12px;color:#344054;max-width:calc(100vw - 48px)}
+.update-notice>svg{color:#5573e8;flex:none}
+.update-dialog-content{padding:20px;overflow-y:auto}
+.update-installing{position:fixed;inset:0;z-index:2000;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#f7f8fa;color:#344054;padding:24px;text-align:center}
+.update-installing h2{font-size:19px}.update-installing p{font-size:13px;color:#7b8795}

@@ -1,0 +1,18 @@
+.network-settings{margin:18px 0 20px}
+.network-port-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+.network-port-input{display:flex;align-items:center;flex:1;min-width:0;height:38px;padding:0 5px 0 11px;border:1px solid #e2e7ef;border-radius:8px;background:#fafbfd;transition:border-color .15s,box-shadow .15s,background .15s}
+.network-port-input:focus-within{border-color:#8b9df3;background:#fff;box-shadow:0 0 0 3px #526ef012}
+.network-port-input>span{flex-shrink:0;color:#98a2b2;font-family:ui-monospace,monospace;font-size:11px;white-space:nowrap}
+.network-port-input input{width:100%;min-width:65px;height:100%;padding:0 8px;border:0;outline:0;background:transparent;color:#344153;font-family:ui-monospace,monospace;font-size:12px;font-weight:600;letter-spacing:.4px}
+.network-port-input input::placeholder{color:#a1aaba;font-family:inherit;font-size:10px;font-weight:400;letter-spacing:0}
+.network-port-refresh{display:grid;place-items:center;flex-shrink:0;width:27px;height:27px;border:0;border-radius:6px;color:#8793a7;background:transparent;transition:background .15s,color .15s}
+.network-port-refresh:hover:not(:disabled){color:#536fea;background:#edf1ff}
+.network-port-refresh:focus-visible,.network-port-recommendations button:focus-visible{outline:2px solid #8b9df3;outline-offset:2px}
+.network-port-save.button{height:38px;border-radius:8px;padding:0 12px;white-space:nowrap}
+.network-settings button:disabled{opacity:.5;cursor:default}
+.network-port-recommendations{display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-height:27px;margin-top:9px}
+.network-port-recommendations>span{margin-right:3px;color:#98a2b2;font-size:10px}
+.network-port-recommendations button{padding:4px 8px;border:1px solid #e8ecf2;border-radius:5px;background:#f7f9fc;color:#738098;font-family:ui-monospace,monospace;font-size:10px;transition:background .15s,border-color .15s,color .15s}
+.network-port-recommendations button:hover:not(:disabled),.network-port-recommendations button.selected{border-color:#d3dcff;background:#eef2ff;color:#536fea}
+.network-settings .field-hint{line-height:1.7;margin:8px 0 0}
+.network-settings .network-port-error{color:#c46c62}

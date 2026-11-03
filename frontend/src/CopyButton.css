@@ -1,0 +1,11 @@
+.copy-field .copy-feedback-button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:76px;height:29px;flex-shrink:0;margin:-4px -4px -4px 8px;padding:0 8px;border:1px solid transparent;border-radius:6px;background:#eef2ff;color:#5b70dc;font-size:10px;font-weight:500;transition:background .15s,color .15s,transform .1s,border-color .15s}
+.copy-field .copy-feedback-button:hover:not(:disabled){background:#e3eaff;border-color:#d5dfff}
+.copy-field .copy-feedback-button:active:not(:disabled){transform:scale(.94);background:#d9e2ff}
+.copy-field .copy-feedback-button:focus-visible{outline:2px solid #8b9df3;outline-offset:2px}
+.copy-field .copy-feedback-button.is-success{background:#e6f6ee;color:#23946b;border-color:#cdebdc}
+.copy-field .copy-feedback-button.is-error{background:#fff0ed;color:#c5685b;border-color:#f5d9d3}
+.copy-field .copy-feedback-button:disabled{cursor:default;opacity:.6}
+.copy-field .copy-feedback-button.is-pending{opacity:1}
+.toast[role="status"]{z-index:1100}
+.toast.copy-error svg{color:#f2b4a8}
+@media(prefers-reduced-motion:reduce){.copy-field .copy-feedback-button{transition:none}.copy-field .copy-feedback-button:active:not(:disabled){transform:none}}
