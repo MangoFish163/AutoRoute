@@ -35,7 +35,7 @@ Tauri 官方支持 NSIS EXE、安装模板、安装/卸载钩子和按需联网�
 
 发布资产：
 
-- `LocalModelRouter-<version>-windows-x64-setup.exe`：唯一下载，轻量联网安装器。
+- `win-x64-setup.exe`：唯一下载，轻量联网安装器。
 - `SHA256SUMS.txt`：下载校验值。
 - 发布说明：支持的系统、版本变化、安装包大小与升级说明。
 

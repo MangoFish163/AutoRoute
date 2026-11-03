@@ -56,8 +56,10 @@ jobs:
           ./scripts/build-windows.ps1 -TestInstaller -RequireSigning:$false -CertificateThumbprint '' -TimestampUrl ''
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-x64-unsigned-installer
-          path: release/*
+          name: win-x64
+          path: |
+            release/win-x64-setup.exe
+            release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
       - name: Publish unsigned prerelease
@@ -68,7 +70,7 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           APP_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          $installer = "release/LocalModelRouter-$env:APP_VERSION-windows-x64-setup.exe"
+          $installer = 'release/win-x64-setup.exe'
           if ((Get-AuthenticodeSignature -LiteralPath $installer).Status -ne 'NotSigned') { throw 'This workflow publishes unsigned test builds only.' }
           $notes = @(
             '# Windows 未签名测试版 / Unsigned test build',
@@ -77,7 +79,7 @@ jobs:
             '',
             '此版本未经代码签名，尚未接入 SignPath。Windows 应用控制可能阻止安装、运行或正常卸载；本测试版不保证可在启用相关策略的系统上使用。',
             '',
-            '下载 setup.exe 安装；SHA256SUMS.txt 用于校验下载文件。无需 Python、Node.js 或 Rust；系统缺少 WebView2 时安装器自动联网补装。',
+            '下载 win-x64-setup.exe 安装；SHA256SUMS.txt 用于校验下载文件。无需 Python、Node.js 或 Rust；系统缺少 WebView2 时安装器自动联网补装。',
             '',
             '服务仅面向可信本机使用。管理 API 当前没有独立鉴权，请勿将本地端口暴露到局域网或公网。',
             '',

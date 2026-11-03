@@ -8,7 +8,7 @@
 .\scripts\build-windows.ps1 -Python C:\Path\To\Python312\python.exe
 ```
 
-脚本创建隔离构建环境，使用锁定依赖，执行后端测试、PyInstaller 冻结、独立后端冒烟检查和 Tauri NSIS 构建。输出为 `release/LocalModelRouter-<version>-windows-x64-setup.exe` 与 `release/SHA256SUMS.txt`。仅保留轻量联网安装版：WebView2 使用 `downloadBootstrapper`，系统已有运行时则复用，缺少时自动下载并补装；不把完整运行时安装程序打入包中。
+脚本创建隔离构建环境，使用锁定依赖，执行后端测试、PyInstaller 冻结、独立后端冒烟检查和 Tauri NSIS 构建。输出为 `release/win-x64-setup.exe` 与 `release/SHA256SUMS.txt`。仅保留轻量联网安装版：WebView2 使用 `downloadBootstrapper`，系统已有运行时则复用，缺少时自动下载并补装；不把完整运行时安装程序打入包中。
 
 在干净的测试机上添加 `-TestInstaller` 可执行真实 NSIS 路径回归和安装/修复/卸载验证；它会临时创建当前用户的卸载登记和开始菜单入口，完成后移除。发现已安装的正式版本时会拒绝运行。CI 默认执行这组检查。测试不会启动桌面实例，后端使用随机空闲端口与隔离数据目录。
 
@@ -56,3 +56,21 @@ $env:LMR_TIMESTAMP_URL = '<证书签发方提供的 RFC3161 时间戳 URL>'
 签名能够提供可验证的发布者身份，不能保证目标机器的所有应用控制策略自动允许该程序；最终仍须在目标策略环境中验证正常卸载。目前没有可用签名证书，尚未生成或验收签名修复包。
 
 应用鉴权、模型凭据与 GitHub 发布令牌的区别见 [AUTHENTICATION.md](AUTHENTICATION.md)。
+
+## 发布附件命名规则
+
+后续发布文件只表达系统、架构和包类型，不包含应用名称和版本号。版本号保留在 GitHub Release 标题、标签及程序元数据中；同名附件在不同 Release 中彼此独立。已公开历史附件不追溯改名。
+
+| 系统与包类型 | 文件名 |
+|---|---|
+| Windows x64 安装器（当前实现） | `win-x64-setup.exe` |
+| Windows ARM64 安装器（未来） | `win-arm64-setup.exe` |
+| Linux x64 AppImage（未来） | `linux-x64.AppImage` |
+| Linux ARM64 AppImage（未来） | `linux-arm64.AppImage` |
+| Debian/Ubuntu x64 包（未来） | `linux-x64.deb` |
+| RPM 系列 x64 包（未来） | `linux-x64.rpm` |
+| macOS Apple Silicon 磁盘映像（未来） | `macos-arm64.dmg` |
+| macOS Intel 磁盘映像（未来） | `macos-x64.dmg` |
+| macOS 双架构磁盘映像（未来） | `macos-universal.dmg` |
+
+扩展规则为 `<系统>-<架构>[-<用途>].<格式>`。Windows 安装器保留 `setup`；Linux/macOS 的扩展名本身说明包类型。若未来同时发布 PKG，使用 `macos-arm64.pkg` 等名称。`SHA256SUMS.txt` 保持固定名称，其中引用本次实际发布的短文件名。构建产物上传步骤只包含指定安装器和校验文件，避免混入本地旧名称产物。

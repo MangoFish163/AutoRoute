@@ -67,7 +67,7 @@ try {
         }
     }
     New-Item -ItemType Directory -Force release | Out-Null
-    $output = Join-Path $projectDir "release/LocalModelRouter-$version-windows-x64-setup.exe"
+    $output = Join-Path $projectDir 'release/win-x64-setup.exe'
     Copy-Item -LiteralPath $installers[0].FullName -Destination $output
     $hash = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $([IO.Path]::GetFileName($output))" | Set-Content -Encoding ascii release/SHA256SUMS.txt

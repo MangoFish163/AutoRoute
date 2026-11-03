@@ -1,6 +1,6 @@
 # 本地模型路由器
 
-普通 Windows 用户请前往 [Windows 安装版发布页](https://github.com/MangoFish163/AutoRoute/releases) 下载 `LocalModelRouter-<版本>-windows-x64-setup.exe`（自动发布的未签名测试版位于 Pre-release）。双击安装，可选择应用位置；无需 Python、Node.js 或开发环境。首期目标平台为 Windows 10/11 x64。
+普通 Windows 用户请前往 [Windows 安装版发布页](https://github.com/MangoFish163/AutoRoute/releases) 下载 `win-x64-setup.exe`（自动发布的未签名测试版位于 Pre-release）。双击安装，可选择应用位置；无需 Python、Node.js 或开发环境。首期目标平台为 Windows 10/11 x64。
 
 当前本地产物仍是未签名测试包：已确认它的临时卸载程序在本机应用控制策略下被拦截，正常卸载尚未验收通过，不应作为正式发布。签名构建和正常卸载测试已补齐，仍需配置符合目标系统策略的代码签名证书。详情见 [验收记录](packaging/验收记录.md)。
 
