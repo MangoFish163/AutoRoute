@@ -226,8 +226,38 @@ async def lifespan(_: FastAPI):
 _version_file = (Path(sys._MEIPASS) / "metadata" / "package.json") if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1] / "frontend" / "package.json"
 APP_VERSION = json.loads(_version_file.read_text(encoding="utf-8"))["version"]
 app = FastAPI(title="Local Model Router", version=APP_VERSION, lifespan=lifespan)
+app.state.management_token = os.environ.pop("LOCAL_MODEL_ROUTER_MANAGEMENT_TOKEN", "") or secrets.token_hex(32)
+
+
+class ManagementAuthMiddleware:
+    """Authenticate all management routes before parsing bodies or opening streams."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "")
+        if scope["type"] == "http" and (path == "/api" or path.startswith("/api/")):
+            headers = [value for name, value in scope["headers"] if name.lower() == b"x-management-token"]
+            expected = app.state.management_token.encode("utf-8")
+            if not expected or len(headers) != 1 or not secrets.compare_digest(headers[0], expected):
+                response = JSONResponse({"detail": "Invalid management token"}, status_code=401,
+                                        headers={"Cache-Control": "no-store"})
+                await response(scope, receive, send)
+                return
+            async def no_cache_send(message):
+                if message["type"] == "http.response.start":
+                    message["headers"] = [(name, value) for name, value in message.get("headers", [])
+                                          if name.lower() != b"cache-control"] + [(b"cache-control", b"no-store")]
+                await send(message)
+            await self.app(scope, receive, no_cache_send)
+            return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(ManagementAuthMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=["http://tauri.localhost", "https://tauri.localhost", "tauri://localhost"],
-                   allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Content-Type"])
+                   allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Content-Type", "X-Management-Token"])
 
 
 @app.exception_handler(HTTPException)
@@ -853,10 +883,33 @@ def health():
 
 
 @app.get("/api/bootstrap")
-def bootstrap():
+def bootstrap(request: Request):
     with connect() as db:
         count = db.execute("SELECT COUNT(*) FROM deployments").fetchone()[0]
-    return {"base_url": "http://127.0.0.1:8787/v1", "client_key": client_key(), "deployment_count": count, "data_dir": str(APP_DIR.resolve())}
+    return {"base_url": f"http://127.0.0.1:{getattr(app.state, 'listener_port', (request.scope.get('server') or ('127.0.0.1', 80))[1])}/v1", "port_changed_from": getattr(app.state, "port_changed_from", None), "client_key": client_key(), "deployment_count": count, "data_dir": str(APP_DIR.resolve())}
+
+
+class NetworkConfig(BaseModel):
+    port: int = Field(strict=True, ge=1024, le=65535)
+
+
+@app.get("/api/network")
+def network_config():
+    from network import configured_port
+    return {"port": configured_port()}
+
+
+@app.put("/api/network")
+def update_network(body: NetworkConfig):
+    from network import save_port
+    save_port(body.port)
+    return {"port": body.port}
+
+
+@app.get("/api/network/recommendations")
+def network_recommendations():
+    from network import recommended_ports
+    return {"ports": recommended_ports()}
 
 
 @app.get("/api/deployments")

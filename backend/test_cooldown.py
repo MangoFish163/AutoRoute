@@ -38,7 +38,7 @@ class CooldownTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_edit_without_replacing_keys_clears_all_cooldowns(self):
         self.assertEqual(router.candidates('test'), [])
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=router.app), base_url='http://test') as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=router.app), base_url='http://test', headers={'X-Management-Token': router.app.state.management_token}) as client:
             response = await client.put('/api/deployments/' + self.dep['id'], json={
                 **self.body, 'base_url': 'https://fixed.example.test/v1', 'api_keys': []})
             self.assertEqual(response.status_code, 200, response.text)
@@ -58,14 +58,14 @@ class CooldownTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(router.available_key_indices(self.other['id'], 2), [])
 
     async def test_replacing_keys_also_clears_deployment_cooldown(self):
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=router.app), base_url='http://test') as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=router.app), base_url='http://test', headers={'X-Management-Token': router.app.state.management_token}) as client:
             response = await client.put('/api/deployments/' + self.dep['id'], json={**self.body, 'api_keys': ['new-test-key']})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['health'], 'ready')
         self.assertEqual(router.candidates('test')[0]['api_keys'], ['new-test-key'])
 
     async def test_rejected_edit_leaves_cooldowns_intact(self):
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=router.app), base_url='http://test') as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=router.app), base_url='http://test', headers={'X-Management-Token': router.app.state.management_token}) as client:
             response = await client.put('/api/deployments/' + self.dep['id'], json={**self.body, 'base_url': ''})
         self.assertEqual(response.status_code, 422)
         self.assertEqual(router.get_state(self.dep['id'])['health'], 'cooldown')
@@ -104,7 +104,7 @@ class RoutingPolicyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(router.get_state(self.dep['id'])['health'], 'cooldown')
             with router.connect() as db:
                 db.execute("INSERT OR REPLACE INTO settings VALUES(?, '1')", (f"key_cursor:{self.dep['id']}",))
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=router.app), base_url='http://test') as client:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=router.app), base_url='http://test', headers={'X-Management-Token': router.app.state.management_token}) as client:
                 response = await client.put('/api/deployments/' + self.dep['id'], json=self.body)
             self.assertEqual(response.status_code, 200, response.text)
             self.dep = response.json()

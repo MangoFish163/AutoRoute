@@ -17,7 +17,7 @@ import app as router
 @asynccontextmanager
 async def running_client():
     async with router.lifespan(router.app):
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=router.app), base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=router.app), base_url="http://test", headers={'X-Management-Token': router.app.state.management_token}) as client:
             yield client
 
 

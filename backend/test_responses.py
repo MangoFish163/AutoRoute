@@ -67,7 +67,7 @@ class ResponsesTests(unittest.IsolatedAsyncioTestCase):
         parts = [{'type': 'image_url', 'image_url': {'url': 'https://example.test/image.png'}}, {'type': 'text', 'text': '你看见了什么？'}]
         if inbound == 'anthropic':
             parts[0] = {'type': 'image', 'source': {'type': 'url', 'url': 'https://example.test/image.png'}}
-        async with Client(transport=httpx.ASGITransport(app=router.app), base_url='http://test') as client:
+        async with Client(transport=httpx.ASGITransport(app=router.app), base_url='http://test', headers={'X-Management-Token': router.app.state.management_token}) as client:
             with patch.object(router, 'candidates', return_value=[dep]), patch.object(router, 'choose_credential', return_value=('test-key', 0)), patch.object(router, 'record_result'), patch.object(router, 'require_client_key'), patch.object(router.httpx, 'AsyncClient', side_effect=lambda **_: Client(transport=httpx.MockTransport(upstream))):
                 response = await client.post('/v1/messages' if inbound == 'anthropic' else '/v1/chat/completions', json={
                     'model': 'local-alias', 'messages': [{'role': 'user', 'content': parts}], 'max_tokens': 512,
@@ -186,7 +186,7 @@ class ResponsesTests(unittest.IsolatedAsyncioTestCase):
         await response.aclose()
 
     async def test_crud_accepts_responses_and_models_url_strips_endpoint(self):
-        async with Client(transport=httpx.ASGITransport(app=router.app), base_url='http://test') as client:
+        async with Client(transport=httpx.ASGITransport(app=router.app), base_url='http://test', headers={'X-Management-Token': router.app.state.management_token}) as client:
             created = await client.post('/api/deployments', json={'name': '豆包', 'alias': 'doubao', 'provider': 'responses',
                                       'base_url': BASE, 'upstream_model': 'doubao-seed-evolving', 'api_keys': ['test-key']})
             self.assertEqual(created.status_code, 200, created.text)

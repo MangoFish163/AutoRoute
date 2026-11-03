@@ -49,7 +49,7 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                     received_options.append(options)
                     return Client(transport=httpx.MockTransport(upstream), trust_env=False)
 
-                async with Client(transport=httpx.ASGITransport(app=router.app), base_url='http://test', trust_env=False) as client:
+                async with Client(transport=httpx.ASGITransport(app=router.app), base_url='http://test', headers={'X-Management-Token': router.app.state.management_token}, trust_env=False) as client:
                     with ExitStack() as stack:
                         stack.enter_context(patch.dict(os.environ, {'HTTP_PROXY': 'http://env-proxy.test:9999',
                                                                    'HTTPS_PROXY': 'http://env-proxy.test:9999',

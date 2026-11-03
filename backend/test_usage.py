@@ -46,7 +46,7 @@ class UsageTests(unittest.IsolatedAsyncioTestCase):
         else:
             body = {'id': 'test', 'usage': usage, 'choices': [{'message': {'content': 'ok'}}], 'content': [{'type': 'text', 'text': 'ok'}]}
             response = lambda _: httpx.Response(200, json=body)
-        async with Client(transport=httpx.ASGITransport(app=router.app), base_url='http://test') as client:
+        async with Client(transport=httpx.ASGITransport(app=router.app), base_url='http://test', headers={'X-Management-Token': router.app.state.management_token}) as client:
             with patch.object(router, 'candidates', return_value=[dep]), patch.object(router, 'choose_credential', return_value=('test-key', 0)), patch.object(router, 'record_result'), patch.object(router, 'require_client_key'), patch.object(router.httpx, 'AsyncClient', side_effect=lambda **_: Client(transport=httpx.MockTransport(response))):
                 result = await client.post('/v1/messages' if inbound == 'anthropic' else '/v1/chat/completions', json={'model': 'test', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': stream})
                 self.assertEqual(result.status_code, 200, result.text)
@@ -60,7 +60,7 @@ class UsageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((event['input_tokens'], event['output_tokens'], event['total_tokens']), (31, 38, 69))
 
     async def test_native_window_can_access_backend(self):
-        async with Client(transport=httpx.ASGITransport(app=router.app), base_url='http://test') as client:
+        async with Client(transport=httpx.ASGITransport(app=router.app), base_url='http://test', headers={'X-Management-Token': router.app.state.management_token}) as client:
             response = await client.options('/api/events', headers={'Origin': 'http://tauri.localhost', 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'content-type'})
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers['access-control-allow-origin'], 'http://tauri.localhost')

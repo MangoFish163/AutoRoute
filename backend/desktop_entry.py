@@ -45,7 +45,8 @@ def main() -> int:
     parser.add_argument('--cleanup', action='store_true')
     parser.add_argument('--remove-data', action='store_true')
     parser.add_argument('--validate-tree', type=Path)
-    parser.add_argument('--port', type=int, default=8787)
+    parser.add_argument('--port', type=int, help='Explicit port (no automatic fallback)')
+    parser.add_argument('--port-file', type=Path)
     args = parser.parse_args()
     try:
         if args.validate_tree is not None:
@@ -56,7 +57,28 @@ def main() -> int:
             return 0
         import uvicorn
         from app import app
-        server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=args.port,
+        if os.environ.get('LOCAL_MODEL_ROUTER_DESKTOP_INSTANCE'):
+            # First line of the inherited private pipe is the per-launch management
+            # token; subsequent input/EOF remains the shutdown signal.
+            token = sys.stdin.readline(256).strip() if sys.stdin is not None else ''
+            if len(token) != 64 or any(c not in '0123456789abcdef' for c in token):
+                raise ValueError('Missing or invalid desktop management token')
+            app.state.management_token = token
+        from network import configured_port, bind_listener, save_port, write_json
+        preferred = args.port if args.port is not None else configured_port()
+        listener = bind_listener(preferred, fallback=args.port is None)
+        port = listener.getsockname()[1]
+        try:
+            if args.port is None:
+                save_port(port)
+            app.state.listener_port = port
+            app.state.port_changed_from = preferred if preferred != port else None
+            if args.port_file:
+                write_json(args.port_file, {'port': port})
+        except Exception:
+            listener.close()
+            raise
+        server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=port,
                                                workers=1, loop='asyncio', http='h11',
                                                ws='none', timeout_graceful_shutdown=8))
 
@@ -69,7 +91,10 @@ def main() -> int:
 
         if os.environ.get('LOCAL_MODEL_ROUTER_DESKTOP_INSTANCE'):
             threading.Thread(target=watch_parent, daemon=True).start()
-        server.run()
+        try:
+            server.run(sockets=[listener])
+        finally:
+            listener.close()
         return 0 if server.started else 1
     except Exception as error:
         print(f'{type(error).__name__}: {error}', file=sys.stderr)
