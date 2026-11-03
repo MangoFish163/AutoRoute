@@ -1,0 +1,11 @@
+{
+  "version": "0.1.1",
+  "notes": "支持在客户端直接更新：\n\n- 启动时自动检查新版本，也可在系统设置中手动检查。\n- 可查看更新说明、下载进度，并在准备好后选择重启安装。\n- 下载和安装前验证更新签名；下载失败可重试。\n- 安装前停止本地服务，保留配置、密钥和历史记录。\n\n同时增加应用自动维护的管理 API 认证、本地网关端口配置与冲突自动避让，并完善网络设置、复制操作和审计详情界面。\n\n这是 Windows 未签名测试版，更新签名不等同于 Windows 代码签名，系统应用控制仍可能拦截安装、运行或卸载。从没有更新功能的旧版迁移，需要先手动安装一次此版本。\n",
+  "pub_date": "2026-11-03T10:29:51.690313Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSHdXZEhXU1g2QXNSMCtqL1dsdEhZQW9qc3JicThIamJTZS9ValpZMlhHMGJIcUVRKy85WklpVzd0OXNzVFZVUXhLdjNpOEplVVh0WnZqRmNoNmtROStwNS9SV09Ha1FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzAxNzc1CWZpbGU6TG9jYWwgTW9kZWwgUm91dGVyXzAuMS4xX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjEuMQpEcWZOWnNKUm4reUVnZ2FzZXd3Q1loV0srQnlDR21DKzd3UXpjYkpjaXArSWJJYkxPMzc4NDg1YllkT2p2cEVwQUJHaks5Y0F2N1ROMU93cGkzaWVEZz09Cg==",
+      "url": "https://github.com/MangoFish163/AutoRoute/releases/download/v0.1.1/win-x64-setup.exe"
+    }
+  }
+}
