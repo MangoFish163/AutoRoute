@@ -64,7 +64,7 @@ def installed():
         return False
 
 
-def run_installer(executable, signer_thumbprint=None):
+def run_installer(executable, signer_thumbprint=None, previous_installer=None):
     if installed():
         raise RuntimeError('Existing user installation found; refusing to replace it during smoke test')
     # Preserve a failed install and its registration for investigation. Deleting
@@ -90,6 +90,22 @@ def run_installer(executable, signer_thumbprint=None):
 
         installer = str(Path(executable).resolve())
         try:
+            if previous_installer:
+                execute([str(Path(previous_installer).resolve()), '/S', '/NS', f'/D={target}'])
+                assert installed(), 'Previous version registration not created'
+                data = profile / '.local-model-router'
+                data.mkdir(exist_ok=True)
+                previous_data = {'client.key': b'previous-version-key',
+                                 'network.json': b'{"port": 19998}',
+                                 'router.db': b'previous-version-database-marker'}
+                for name, content in previous_data.items():
+                    (data / name).write_bytes(content)
+                execute([installer, '/P', '/UPDATE', '/NS'])
+                assert installed(), 'Cross-version upgrade lost registration'
+                assert (target / 'backend' / 'router-backend.exe').exists()
+                for name, content in previous_data.items():
+                    assert (data / name).read_bytes() == content, f'Cross-version upgrade changed {name}'
+                print('Cross-version upgrade passed: previous release to current, custom path and user data preserved.')
             execute([installer, '/S', '/NS', f'/D={target}'])
             assert installed(), 'Uninstall registration not created'
             backend = target / 'backend' / 'router-backend.exe'
@@ -152,4 +168,5 @@ def run_installer(executable, signer_thumbprint=None):
 
 
 if __name__ == '__main__':
-    run_installer(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None)
+    run_installer(sys.argv[1], sys.argv[2] or None if len(sys.argv) > 2 else None,
+                  os.environ.get('LMR_PREVIOUS_INSTALLER'))

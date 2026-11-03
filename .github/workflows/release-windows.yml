@@ -61,6 +61,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          $baseline = Join-Path $env:RUNNER_TEMP 'autoroute-upgrade-baseline'
+          New-Item -ItemType Directory -Force $baseline | Out-Null
+          $baseUrl = 'https://github.com/MangoFish163/AutoRoute/releases/download/v0.1.0-unsigned.2'
+          $oldName = 'LocalModelRouter-0.1.0-windows-x64-setup.exe'
+          Invoke-WebRequest "$baseUrl/$oldName" -OutFile (Join-Path $baseline $oldName)
+          Invoke-WebRequest "$baseUrl/SHA256SUMS.txt" -OutFile (Join-Path $baseline 'SHA256SUMS.txt')
+          $expected = ((Get-Content (Join-Path $baseline 'SHA256SUMS.txt')) | Where-Object { $_ -match ([regex]::Escape($oldName) + '$') }) -split '\s+'
+          $env:LMR_PREVIOUS_INSTALLER = Join-Path $baseline $oldName
+          if (-not $expected -or (Get-FileHash $env:LMR_PREVIOUS_INSTALLER -Algorithm SHA256).Hash -ne $expected[0]) { throw 'Previous release checksum mismatch.' }
           ./scripts/build-windows.ps1 -TestInstaller -RequireUpdaterSigning -RequireSigning:$false -CertificateThumbprint '' -TimestampUrl ''
       - name: Generate preview update manifest
         shell: pwsh
