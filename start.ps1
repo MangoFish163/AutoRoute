@@ -76,7 +76,7 @@ for ($attempt = 0; $attempt -lt 15; $attempt++) {
     try {
         $backendPort = (Get-Content -Raw -LiteralPath $portFile | ConvertFrom-Json).port
         $health = Invoke-WebRequest -Uri "http://127.0.0.1:$backendPort/health" -TimeoutSec 2 -UseBasicParsing
-        if ($health.StatusCode -eq 200 -and $health.Content -match '"version":"0\.1\.0"') { $backendReady = $true; break }
+        if ($health.StatusCode -eq 200 -and ($health.Content | ConvertFrom-Json).application -eq 'com.localmodelrouter.desktop') { $backendReady = $true; break }
     } catch { }
     if ($backend.HasExited) { break }
 }

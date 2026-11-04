@@ -3,7 +3,6 @@ import { consumeEvents } from './serverEvents.js'
 
 const desktop = isTauri()
 
-
 // Browser development only: the launcher supplies a fragment, never a query
 // parameter. Remove it immediately; session storage allows a development reload.
 if (!desktop) {
@@ -31,7 +30,14 @@ export async function api(path, options = {}) {
   const res = await managementFetch(path, { ...options, headers })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail?.error?.message || body.detail || body.error?.message || `请求失败 (${res.status})`)
+    throw new Error(
+      body.detail?.error?.message ||
+        (Array.isArray(body.detail)
+          ? body.detail.map((item) => item.msg).join('；')
+          : body.detail) ||
+        body.error?.message ||
+        `请求失败 (${res.status})`,
+    )
   }
   return res.json()
 }
@@ -39,17 +45,25 @@ export async function api(path, options = {}) {
 export async function watchManagementEvents(path, onNew, signal) {
   while (!signal.aborted) {
     try {
-      const response = await managementFetch(path, { signal, headers: { Accept: 'text/event-stream' } })
+      const response = await managementFetch(path, {
+        signal,
+        headers: { Accept: 'text/event-stream' },
+      })
       if (!response.ok) {
         await response.body?.cancel()
         throw new Error('无法连接实时日志')
       }
+      onNew()
       await consumeEvents(response.body, onNew)
     } catch {
       if (signal.aborted) return
     }
-    await new Promise(resolve => {
-      const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', finish); resolve() }
+    await new Promise((resolve) => {
+      const finish = () => {
+        clearTimeout(timer)
+        signal.removeEventListener('abort', finish)
+        resolve()
+      }
       const timer = setTimeout(finish, 3000)
       signal.addEventListener('abort', finish, { once: true })
       if (signal.aborted) finish()

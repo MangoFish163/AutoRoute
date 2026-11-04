@@ -41,7 +41,9 @@ try {
     } | ConvertTo-Json -Depth 5 -Compress
     [System.IO.File]::WriteAllText($overridePath, $override, [System.Text.UTF8Encoding]::new($false))
 
-    npm run tauri -- dev --config $overridePath
+    $previousDevOrigin = $env:LOCAL_MODEL_ROUTER_DEV_ORIGIN
+    $env:LOCAL_MODEL_ROUTER_DEV_ORIGIN = "http://127.0.0.1:$frontendPort"
+    try { npm run tauri -- dev --config $overridePath } finally { $env:LOCAL_MODEL_ROUTER_DEV_ORIGIN = $previousDevOrigin }
     if ($LASTEXITCODE -ne 0) { throw 'Tauri desktop session ended with an error.' }
 }
 finally {

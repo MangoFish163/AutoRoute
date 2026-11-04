@@ -44,14 +44,26 @@
 }
 
 @keyframes desktop-startup-orbit {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes desktop-startup-breathe {
-  0%, 100% { opacity: .72; transform: scale(.96); }
-  50% { opacity: 1; transform: scale(1); }
+  0%,
+  100% {
+    opacity: 0.72;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .desktop-startup-icon, .desktop-startup-ring { animation: none; }
+  .desktop-startup-icon,
+  .desktop-startup-ring {
+    animation: none;
+  }
 }

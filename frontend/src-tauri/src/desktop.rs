@@ -303,6 +303,22 @@ fn retry_backend(app: tauri::AppHandle) {
     launch_backend(app);
 }
 #[tauri::command]
+fn restart_backend(app: tauri::AppHandle) {
+    {
+        let lifecycle = app.state::<Lifecycle>();
+        let _guard = lifecycle.0.lock().unwrap();
+        if let Some(mut owned) = app.state::<BackendProcess>().0.lock().unwrap().take() {
+            shutdown_backend(&mut owned);
+        }
+        *app.state::<StartupState>().0.lock().unwrap() = StartupStatus {
+            phase: "starting".into(),
+            error: None,
+        };
+    }
+    app.state::<Stopping>().0.store(false, Ordering::SeqCst);
+    launch_backend(app);
+}
+#[tauri::command]
 fn open_log_directory() -> Result<(), String> {
     std::fs::create_dir_all(log_dir()).map_err(|e| e.to_string())?;
     Command::new("explorer.exe")
@@ -347,6 +363,7 @@ pub fn run() {
             management_token,
             backend_url,
             retry_backend,
+            restart_backend,
             open_log_directory,
             crate::updates::check_app_update,
             crate::updates::download_app_update,
