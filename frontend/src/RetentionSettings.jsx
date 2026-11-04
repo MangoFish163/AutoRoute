@@ -35,12 +35,18 @@ export default function RetentionSettings({ onError }) {
   return (
     <label className="setup-field">
       历史记录保留
-      <FormSelect ariaLabel="历史记录保留" value={days} onChange={(value) => save({ target: { value } })} options={[
+      <FormSelect
+        ariaLabel="历史记录保留"
+        value={days}
+        onChange={(value) => save({ target: { value } })}
+        options={[
           [0, '关闭自动清理'],
           [30, '30 天'],
           [90, '90 天'],
           [180, '180 天'],
-        ]} disabled={busy} />
+        ]}
+        disabled={busy}
+      />
       <small>启用后在启动及每日清理过期请求、权重和 AI 历史；部署统计与冷却状态保留。</small>
     </label>
   )

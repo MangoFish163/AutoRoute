@@ -96,7 +96,9 @@ export default function NetworkSettings() {
             <RefreshCw size={14} className={refreshing ? 'spin' : ''} />
           </button>
         </div>
-        {busy && <LoaderCircle size={13} className="network-port-saving spin" aria-label="保存中" />}
+        {busy && (
+          <LoaderCircle size={13} className="network-port-saving spin" aria-label="保存中" />
+        )}
       </div>
       <div className="network-port-recommendations" aria-busy={refreshing}>
         <span>推荐端口</span>

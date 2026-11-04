@@ -492,7 +492,8 @@ export function FormSelect({ value, onChange, options, disabled = false, ariaLab
     }
     placeMenu()
     const dismiss = (event) => {
-      if (!root.current?.contains(event.target) && !menuRef.current?.contains(event.target)) setOpen(false)
+      if (!root.current?.contains(event.target) && !menuRef.current?.contains(event.target))
+        setOpen(false)
     }
     document.addEventListener('pointerdown', dismiss)
     window.addEventListener('resize', placeMenu)
@@ -538,43 +539,45 @@ export function FormSelect({ value, onChange, options, disabled = false, ariaLab
         <span>{options.find(([v]) => v === value)?.[1]}</span>
         <ChevronDown size={13} />
       </button>
-      {open && menuStyle && createPortal(
-        <div ref={menuRef} className="form-select-options" style={menuStyle} role="listbox">
-          {options.map(([v, label], index) => (
-            <button
-              type="button"
-              key={v}
-              role="option"
-              aria-selected={v === value}
-              tabIndex={-1}
-              ref={(element) => {
-                optionRefs.current[index] = element
-              }}
-              onKeyDown={(event) => {
-                const key = event.key
-                if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(key)) {
-                  event.preventDefault()
-                  optionRefs.current[
-                    key === 'Home'
-                      ? 0
-                      : key === 'End'
-                        ? options.length - 1
-                        : (index + (key === 'ArrowUp' ? -1 : 1) + options.length) % options.length
-                  ]?.focus()
-                }
-              }}
-              onClick={() => {
-                close()
-                if (v !== value) onChange(v)
-              }}
-            >
-              <span>{label}</span>
-              {v === value && <Check size={13} />}
-            </button>
-          ))}
-        </div>,
-        document.body,
-      )}
+      {open &&
+        menuStyle &&
+        createPortal(
+          <div ref={menuRef} className="form-select-options" style={menuStyle} role="listbox">
+            {options.map(([v, label], index) => (
+              <button
+                type="button"
+                key={v}
+                role="option"
+                aria-selected={v === value}
+                tabIndex={-1}
+                ref={(element) => {
+                  optionRefs.current[index] = element
+                }}
+                onKeyDown={(event) => {
+                  const key = event.key
+                  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(key)) {
+                    event.preventDefault()
+                    optionRefs.current[
+                      key === 'Home'
+                        ? 0
+                        : key === 'End'
+                          ? options.length - 1
+                          : (index + (key === 'ArrowUp' ? -1 : 1) + options.length) % options.length
+                    ]?.focus()
+                  }
+                }}
+                onClick={() => {
+                  close()
+                  if (v !== value) onChange(v)
+                }}
+              >
+                <span>{label}</span>
+                {v === value && <Check size={13} />}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }

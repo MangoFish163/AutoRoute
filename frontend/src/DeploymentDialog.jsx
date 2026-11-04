@@ -230,16 +230,26 @@ export default function DeploymentDialog({
               {service && (
                 <label className="setup-field">
                   服务商
-                  <FormSelect value={serviceId} onChange={choose} options={providerList.filter((s) => s.base).map((s) => [s.id, s.name])} />
+                  <FormSelect
+                    value={serviceId}
+                    onChange={choose}
+                    options={providerList.filter((s) => s.base).map((s) => [s.id, s.name])}
+                  />
                 </label>
               )}
               {!service && (
                 <>
                   <label className="setup-field">
                     API 格式
-                    <FormSelect value={form.provider} onChange={(value) => change('provider', value)} options={[
-                      ['openai', 'OpenAI Chat Completions'], ['anthropic', 'Anthropic Messages'], ['responses', 'Responses（豆包 / OpenAI）'],
-                    ]} />
+                    <FormSelect
+                      value={form.provider}
+                      onChange={(value) => change('provider', value)}
+                      options={[
+                        ['openai', 'OpenAI Chat Completions'],
+                        ['anthropic', 'Anthropic Messages'],
+                        ['responses', 'Responses（豆包 / OpenAI）'],
+                      ]}
+                    />
                   </label>
                   <label className="setup-field">
                     <span className="setup-url-label">
@@ -375,9 +385,15 @@ export default function DeploymentDialog({
                     <>
                       <label className="setup-field setup-wide">
                         API 格式
-                        <FormSelect value={form.provider} onChange={(value) => change('provider', value)} options={[
-                          ['openai', 'OpenAI Chat Completions'], ['anthropic', 'Anthropic Messages'], ['responses', 'Responses（豆包 / OpenAI）'],
-                        ]} />
+                        <FormSelect
+                          value={form.provider}
+                          onChange={(value) => change('provider', value)}
+                          options={[
+                            ['openai', 'OpenAI Chat Completions'],
+                            ['anthropic', 'Anthropic Messages'],
+                            ['responses', 'Responses（豆包 / OpenAI）'],
+                          ]}
+                        />
                       </label>
                       <label className="setup-field setup-wide">
                         API Base URL

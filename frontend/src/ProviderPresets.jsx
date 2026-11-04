@@ -198,9 +198,15 @@ export default function ProviderPresets({ initial = {}, onSave }) {
           <div className="preset-grid">
             <label>
               API 格式
-              <FormSelect value={p.provider || 'openai'} onChange={(value) => patch('provider', value)} options={[
-                ['openai', 'OpenAI Chat Completions'], ['anthropic', 'Anthropic Messages'], ['responses', 'Responses（豆包 / OpenAI）'],
-              ]} />
+              <FormSelect
+                value={p.provider || 'openai'}
+                onChange={(value) => patch('provider', value)}
+                options={[
+                  ['openai', 'OpenAI Chat Completions'],
+                  ['anthropic', 'Anthropic Messages'],
+                  ['responses', 'Responses（豆包 / OpenAI）'],
+                ]}
+              />
             </label>
             {[
               ['name', '厂商名称', 'text'],
