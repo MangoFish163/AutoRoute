@@ -27,7 +27,7 @@ Windows 单机个人使用的本地模型网关。支持多个 OpenAI/Anthropic 
 
 ## 开发者启动方式
 
-需要 Python 3.11+、Node.js 20+ 和 npm。可以运行根目录的 `start.ps1` 自动创建虚拟环境、安装依赖并启动本地服务；运行 `stop.ps1` 停止服务。也可以手动启动：
+需要 Python 3.11+、Node.js 24+ 和 npm。可以运行根目录的 `start.ps1` 自动创建虚拟环境、安装依赖并启动本地服务；运行 `stop.ps1` 停止服务。也可以手动启动：
 
 ```powershell
 cd backend
@@ -51,7 +51,7 @@ npm run dev
 
 ### 原生桌面窗口（开发版）
 
-需要 Rust/Cargo、Python 3.11+、Node.js 20+。首次可运行 `start.ps1` 准备 Python 与前端依赖，随后运行 `stop.ps1` 停止浏览器版服务，再运行根目录的 `start-desktop.ps1`。Tauri 会从 `5175` 至 `5200` 自动选择空闲端口。点击窗口关闭按钮会隐藏到 Windows 系统托盘，托盘图标左键可重新打开窗口，右键菜单可退出应用；退出时会停止桌面端自己启动的后端。后端默认使用 8787，之后优先使用已保存端口；端口被占用或被系统禁止绑定时自动选择空闲端口并保存，界面提示更新客户端地址。不会复用或停止占用端口的其他服务。桌面端启动的后端日志写入 `%LOCALAPPDATA%\LocalModelRouter\desktop-backend.log`。
+需要 Rust/Cargo、Python 3.11+、Node.js 24+。首次可运行 `start.ps1` 准备 Python 与前端依赖，随后运行 `stop.ps1` 停止浏览器版服务，再运行根目录的 `start-desktop.ps1`。Tauri 会从 `5175` 至 `5200` 自动选择空闲端口。点击窗口关闭按钮会隐藏到 Windows 系统托盘，托盘图标左键可重新打开窗口，右键菜单可退出应用；退出时会停止桌面端自己启动的后端。后端默认使用 8787，之后优先使用已保存端口；端口被占用或被系统禁止绑定时自动选择空闲端口并保存，界面提示更新客户端地址。不会复用或停止占用端口的其他服务。桌面端启动的后端日志写入 `%LOCALAPPDATA%\LocalModelRouter\desktop-backend.log`。
 
 该入口用于本地开发；独立安装版请使用根目录 `scripts/build-windows.ps1` 构建。发布构建通过 PyInstaller 封装后端并使用 `tauri.release.json` 打包，不依赖用户的系统 Python。
 
@@ -88,10 +88,20 @@ npm run dev
 
 ## 技术结构
 
-- `backend/app.py`：FastAPI、本地路由、供应商协议适配、SQLite、规则与 AI 审计。
-- `frontend/src/main.jsx`：React 管理面板与配置交互。
+- `backend/app.py`：FastAPI 应用装配；管理接口、网关、协议适配、存储与规则分别位于独立模块。
+- `frontend/src/main.jsx`：React 应用入口；页面、数据 hooks 与复用组件拆分在独立模块。
 - `frontend/src/components/ui`：本地可编辑的 shadcn/ui 风格 Button/Badge 基础组件。
 - `frontend/src/style.css`：本地仪表盘样式。
 - `frontend/src-tauri`：Tauri Windows 桌面窗口外壳。
 - `start-desktop.ps1`：启动原生桌面开发窗口。
-- `项目设计方案.md`：完整设计、范围、数据模型、阶段与验收标准。
+
+### 重构后的日志与协议能力
+
+- 请求日志按时间区间在后端筛选，游标每页 25 条；概览、趋势和状态统计使用完整区间，不再限制为最近 500 条。旧 `/api/events` 数组接口继续保留。
+- 系统设置 → 数据与隐私可设置历史保留期（关闭、30、90、180 天）；默认关闭。启用后在启动和每日清理过期请求、权重及 AI 历史，部署统计与冷却状态保留。SQLite 可复用空闲页，清理不保证数据库文件立即缩小。
+- 非流式 OpenAI/Anthropic 转换支持基础 HTTP(S) 图片 URL 和 PNG/JPEG/GIF/WebP base64 图片；网关不下载图片。无法转换的部署会被跳过；全部不兼容时返回 400，不降权。跨协议流式、音视频和完整供应商扩展仍不支持。
+- 模型请求体上限为 20 MiB，超限返回 413。
+- 选择日志日期范围会关闭实时刷新；历史区间保持固定边界，列表与统计使用同一区间。当前实时窗口的结束时间随刷新推进。
+- 已认证的模型请求在路由前检查内容块、图片来源与工具嵌套字段；非法输入返回对应 OpenAI/Anthropic 格式的 400，并记录一次失败事件，不请求上游、不影响部署冷却。无效 JSON 和超限请求也会记录失败事件，日志不保存请求正文。
+
+开发检查：`python -m pip install -r backend/requirements-dev.txt`，`python -m unittest discover -s backend -p "test_*.py"`，`npm --prefix frontend ci`，`npm --prefix frontend test`，`npm --prefix frontend run build`。静态检查见 `.github/workflows/ci.yml`。
