@@ -6,9 +6,18 @@ const update = { version: '0.1.2', notes: 'test' }
 test('checking and downloading never install; installation requires a separate action', async () => {
   const calls = []
   const controller = createUpdateController({
-    check: async channel => { calls.push(channel); return update },
-    download: async progress => { progress({ downloaded: 42, total: null }); calls.push('download') },
-    install: async () => { calls.push('install'); throw new Error('launch failed') },
+    check: async (channel) => {
+      calls.push(channel)
+      return update
+    },
+    download: async (progress) => {
+      progress({ downloaded: 42, total: null })
+      calls.push('download')
+    },
+    install: async () => {
+      calls.push('install')
+      throw new Error('launch failed')
+    },
   })
   await controller.install()
   assert.deepEqual(calls, [])
@@ -27,11 +36,16 @@ test('checking and downloading never install; installation requires a separate a
 })
 
 test('failed signature verification cannot enter ready or install; retry downloads again', async () => {
-  let attempts = 0, installs = 0
+  let attempts = 0,
+    installs = 0
   const controller = createUpdateController({
     check: async () => update,
-    download: async () => { if (++attempts === 1) throw new Error('bad signature') },
-    install: async () => { installs++ },
+    download: async () => {
+      if (++attempts === 1) throw new Error('bad signature')
+    },
+    install: async () => {
+      installs++
+    },
   })
   await controller.check()
   await controller.download()
@@ -44,9 +58,15 @@ test('failed signature verification cannot enter ready or install; retry downloa
 })
 
 test('concurrent clicks and channel changes cannot replace an in-flight update', async () => {
-  let complete, checks = 0
+  let complete,
+    checks = 0
   const controller = createUpdateController({
-    check: () => { checks++; return new Promise(resolve => { complete = resolve }) },
+    check: () => {
+      checks++
+      return new Promise((resolve) => {
+        complete = resolve
+      })
+    },
   })
   const pending = controller.check()
   await controller.check('stable')
@@ -59,7 +79,10 @@ test('concurrent clicks and channel changes cannot replace an in-flight update',
 
 test('switching channels discards an already downloaded update, including on check failure', async () => {
   const controller = createUpdateController({
-    check: async channel => { if (channel === 'stable') throw new Error('offline'); return update },
+    check: async (channel) => {
+      if (channel === 'stable') throw new Error('offline')
+      return update
+    },
     download: async () => {},
     install: async () => assert.fail('Must not install stale preview bytes'),
   })
