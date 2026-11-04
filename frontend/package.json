@@ -1,28 +1,41 @@
 {
   "name": "local-model-router-ui",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "test": "node --test src/lib/*.test.js",
+    "test": "npm run test:unit && npm run test:components",
     "preview": "vite preview --host 127.0.0.1",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:unit": "node --test src/lib/*.test.js",
+    "test:components": "vitest run",
+    "lint": "eslint src",
+    "format:check": "prettier --check src",
+    "format": "prettier --write src"
   },
   "dependencies": {
     "@tauri-apps/api": "~2.12.0",
-    "@vitejs/plugin-react": "^4.3.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwind-merge": "^2.6.0",
-    "typescript": "^5.7.3",
-    "vite": "^6.1.0"
+    "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.12.4"
+    "@tauri-apps/cli": "2.12.4",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.8",
+    "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "10.14.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "jsdom": "26.1.0",
+    "prettier": "3.9.10",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vitest": "5.1.0"
   }
 }

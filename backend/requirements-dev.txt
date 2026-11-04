@@ -1,0 +1,3 @@
+-c ../packaging/requirements-windows.lock
+-r requirements.txt
+ruff==0.14.3
