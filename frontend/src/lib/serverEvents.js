@@ -12,10 +12,14 @@ export async function consumeEvents(body, onNew) {
       while ((boundary = /\r?\n\r?\n/.exec(pending))) {
         const frame = pending.slice(0, boundary.index)
         pending = pending.slice(boundary.index + boundary[0].length)
-        if (frame.split(/\r?\n/).some(line => /^event: *new$/.test(line))) onNew()
+        if (frame.split(/\r?\n/).some((line) => /^event: *new$/.test(line))) onNew()
       }
     }
   } finally {
-    try { await reader.cancel() } finally { reader.releaseLock() }
+    try {
+      await reader.cancel()
+    } finally {
+      reader.releaseLock()
+    }
   }
 }
